@@ -1,0 +1,60 @@
+# GoFrame 配置文件（manifest 目录，用于打包部署）
+
+# 服务器配置
+server:
+  address: ":8000"
+  serverRoot: "resource/public"
+  serverAgent: "GoFrame Server"
+  readTimeout: "60s"
+  writeTimeout: "60s"
+  idleTimeout: "60s"
+  maxHeaderBytes: 10240
+  keepalive: true
+
+# 日志配置
+logger:
+  path: "logs"
+  level: "all"
+  format: "text"
+  stdout: true
+  fileSize: "100M"
+  fileDays: 7
+  compress: true
+  filePattern: "{Y-m-d}.log"
+
+# 数据库配置
+database:
+  default:
+    link: "sqlite:data.db"
+    debug: true
+    charset: "utf8mb4"
+    dryRun: false
+    maxIdle: 10
+    maxOpen: 100
+    maxLifetime: "30s"
+
+# Redis 配置
+redis:
+  default:
+    address: "127.0.0.1:6379"
+    db: 0
+    pass: ""
+    minIdle: 10
+    maxIdle: 100
+    maxActive: 100
+    idleTimeout: "10s"
+    maxConnLifetime: "30s"
+
+# 应用配置
+app:
+  name: "GoFrame Application"
+  version: "1.0.0"
+  env: "prod"
+
+# 定时任务配置
+cron:
+  enabled: true
+  tasks:
+    - name: "example_task"
+      schedule: "*/5 * * * *"
+      enabled: true
