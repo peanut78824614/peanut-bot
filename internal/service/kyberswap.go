@@ -280,68 +280,13 @@ func formatTVL(tvl float64) string {
 // FormatPoolMessage 格式化池子消息用于 Telegram
 func FormatPoolMessage(pool model.Pool) string {
 	var chainName string
-	var chainColor string
 	switch pool.ChainID {
 	case 56:
 		chainName = "BSC"
-		chainColor = "🟡"
 	case 8453:
 		chainName = "Base"
-		chainColor = "🔵"
 	default:
 		chainName = fmt.Sprintf("Chain %d", pool.ChainID)
-		chainColor = "⚪"
-	}
-	
-	// 协议版本标签 - 显示完整协议名称
-	var versionLabel string
-	protocol := strings.ToLower(pool.Protocol)
-	version := strings.ToLower(pool.Version)
-	
-	if strings.Contains(protocol, "uniswap") {
-		if version == "v4" || strings.Contains(version, "4") {
-			versionLabel = "🟢 Uniswap V4"
-		} else {
-			versionLabel = "🟠 Uniswap V3"
-		}
-	} else if strings.Contains(protocol, "pancake") {
-		if version == "v4" || strings.Contains(version, "4") {
-			versionLabel = "🟣 Pancake V4"
-		} else {
-			versionLabel = "🟡 Pancake V3"
-		}
-	} else if strings.Contains(protocol, "kyber") {
-		if version == "v4" || strings.Contains(version, "4") {
-			versionLabel = "🔵 KyberSwap V4"
-		} else {
-			versionLabel = "🟠 KyberSwap V3"
-		}
-	} else {
-		// 默认根据版本显示
-		if version == "v4" || strings.Contains(version, "4") {
-			versionLabel = "🟢 " + pool.Protocol + " V4"
-		} else {
-			versionLabel = "🟠 " + pool.Protocol + " V3"
-		}
-		if pool.Protocol == "" {
-			if version == "v4" {
-				versionLabel = "🟢 V4"
-			} else {
-				versionLabel = "🟠 V3"
-			}
-		}
-	}
-	
-	// 费率标签
-	var feeLabel string
-	if pool.FeeTier == 1 {
-		feeLabel = "🔵 Fee: 0.01%"
-	} else if pool.FeeTier == 3 {
-		feeLabel = "🟢 Fee: 1%"
-	} else if pool.FeeTier > 0 {
-		feeLabel = fmt.Sprintf("⚪ Fee: %d", pool.FeeTier)
-	} else {
-		feeLabel = ""
 	}
 	
 	// APR 颜色标签
@@ -357,28 +302,38 @@ func FormatPoolMessage(pool model.Pool) string {
 	}
 	
 	var builder strings.Builder
-	// 标题行 - 使用颜色标签和粗体增大字体
-	builder.WriteString(fmt.Sprintf("%s *%s*  %s %s\n", aprColor, pool.Name, chainColor, chainName))
 	
-	// 第二行：版本、费率（增加间距）
-	infoLine := versionLabel
-	if feeLabel != "" {
-		infoLine += "    " + feeLabel // 增加间距
-	}
-	builder.WriteString(infoLine + "\n")
+	// 顶部警报标题
+	builder.WriteString("🚨🚨 *高APR池子提醒*\n\n")
 	
-	// 第三行：交易对（单独一行，更清晰）
+	// 图片块（使用代码块模拟图片效果，将所有关键信息放在一起）
 	tokenPair := fmt.Sprintf("%s/%s", pool.Token0Symbol, pool.Token1Symbol)
-	builder.WriteString(fmt.Sprintf("💱 *%s*\n\n", tokenPair))
-	
-	// 核心数据 - 使用粗体增大字体，不使用代码块
-	builder.WriteString(fmt.Sprintf("💰 *APR:*     %s %s\n", aprColor, formatAPR(pool.APR)))
-	builder.WriteString(fmt.Sprintf("💎 *TVL:*     %s\n", formatTVL(pool.TVL)))
-	if pool.Volume24h > 0 {
-		builder.WriteString(fmt.Sprintf("📈 *Volume:*  %s\n", formatTVL(pool.Volume24h)))
+	feeText := ""
+	if pool.FeeTier == 1 {
+		feeText = "0.01%"
+	} else if pool.FeeTier == 3 {
+		feeText = "1%"
+	} else if pool.FeeTier > 0 {
+		feeText = fmt.Sprintf("%.2f%%", float64(pool.FeeTier)/100.0)
+	} else {
+		feeText = "N/A"
 	}
+	
+	// 注意：图片会在发送时单独生成和发送，这里不包含图片内容
+	
+	// 详细信息块（图片下方）
+	builder.WriteString(fmt.Sprintf("🌐 *代币名称:* %s\n\n", tokenPair))
+	builder.WriteString(fmt.Sprintf("📈 *APR:* %s %s\n\n", aprColor, formatAPR(pool.APR)))
+	builder.WriteString(fmt.Sprintf("💰 *费率:* %s\n\n", feeText))
+	builder.WriteString(fmt.Sprintf("💎 *TVL:* %s\n\n", formatTVL(pool.TVL)))
+	if pool.Volume24h > 0 {
+		builder.WriteString(fmt.Sprintf("📊 *24h交易量:* %s\n\n", formatTVL(pool.Volume24h)))
+	}
+	// 手续费字段始终显示
 	if pool.Fees24h > 0 {
-		builder.WriteString(fmt.Sprintf("💵 *Fees:*    %s\n", formatTVL(pool.Fees24h)))
+		builder.WriteString(fmt.Sprintf("💵 *24h手续费:* %s\n", formatTVL(pool.Fees24h)))
+	} else {
+		builder.WriteString(fmt.Sprintf("💵 *24h手续费:* $0.00\n"))
 	}
 	
 	return builder.String()
@@ -399,13 +354,13 @@ func FormatPoolsMessage(pools []model.Pool, isFirstRun bool) string {
 		builder.WriteString(fmt.Sprintf("✨ *发现 %d 个新池子*\n\n", len(pools)))
 	}
 	
-	// 池子列表 - 用横线分隔
+	// 池子列表 - 每条消息之间用分隔线分隔，不连体
 	for i, pool := range pools {
-		builder.WriteString(fmt.Sprintf("*[%d]* ", i+1))
+		builder.WriteString(fmt.Sprintf("*[%d]*\n\n", i+1))
 		builder.WriteString(FormatPoolMessage(pool))
-		// 在池子之间添加横线分隔（最后一个不添加，使用更粗的横线）
+		// 在池子之间添加分隔线（最后一个不添加）
 		if i < len(pools)-1 {
-			builder.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+			builder.WriteString("\n━━━━━━━━━━━━━━━━━━━━\n\n")
 		}
 	}
 	

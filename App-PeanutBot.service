@@ -1,0 +1,33 @@
+[Unit]
+Description=Peanut Bot Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+# 重要：修改为实际的可执行文件路径
+ExecStart=/path/to/your/app/main
+# 或者如果使用编译后的二进制文件：
+# ExecStart=/path/to/your/app/app
+
+# 工作目录（必须设置为项目根目录，这样配置文件才能正确加载）
+WorkingDirectory=/path/to/your/app
+
+# 环境变量（可选）
+Environment="GF_GCFG_FILE=config/config.yaml"
+
+# 重启策略
+Restart=always
+RestartSec=5
+
+# 日志配置
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=peanutbot
+
+# 安全设置（可选）
+# NoNewPrivileges=true
+# PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

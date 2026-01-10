@@ -1,10 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,6 +18,7 @@ import (
 type ITelegram interface {
 	SendMessage(ctx context.Context, chatID, text string) error
 	SendMessageWithMarkdown(ctx context.Context, chatID, text string) error
+	SendPhoto(ctx context.Context, chatID string, photoPath string, caption string) error
 	GetUpdates(ctx context.Context) ([]Update, error)
 	GetChatInfo(ctx context.Context, chatID string) (*ChatInfo, error)
 }
@@ -250,4 +253,92 @@ func (s *telegramImpl) GetChatInfo(ctx context.Context, chatID string) (*ChatInf
 	}
 
 	return &result.Result, nil
+}
+
+// SendPhoto 发送图片到Telegram
+func (s *telegramImpl) SendPhoto(ctx context.Context, chatID string, photoPath string, caption string) error {
+	if s.botToken == "" {
+		return fmt.Errorf("Telegram bot token 未配置")
+	}
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendPhoto", s.botToken)
+
+	// 读取图片文件（二进制数据）
+	photoData, err := os.ReadFile(photoPath)
+	if err != nil {
+		return fmt.Errorf("读取图片文件失败: %v", err)
+	}
+
+	// 创建multipart form
+	var requestBody bytes.Buffer
+	writer := multipart.NewWriter(&requestBody)
+
+	// 添加chat_id
+	writer.WriteField("chat_id", chatID)
+	
+	// 添加caption（如果有）
+	if caption != "" {
+		writer.WriteField("caption", caption)
+		writer.WriteField("parse_mode", "Markdown")
+	}
+
+	// 添加图片文件
+	part, err := writer.CreateFormFile("photo", "pool_info.png")
+	if err != nil {
+		return fmt.Errorf("创建表单字段失败: %v", err)
+	}
+	_, err = part.Write([]byte(photoData))
+	if err != nil {
+		return fmt.Errorf("写入图片数据失败: %v", err)
+	}
+
+	err = writer.Close()
+	if err != nil {
+		return fmt.Errorf("关闭writer失败: %v", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, &requestBody)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp struct {
+			Description string `json:"description"`
+		}
+		if err := json.Unmarshal(body, &errorResp); err == nil {
+			return fmt.Errorf("Telegram API 错误: %s", errorResp.Description)
+		}
+		return fmt.Errorf("Telegram API 错误: HTTP %d, 响应: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return err
+	}
+
+	if !result.OK {
+		return fmt.Errorf("Telegram API 返回失败")
+	}
+
+	return nil
 }
