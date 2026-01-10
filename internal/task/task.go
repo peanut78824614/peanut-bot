@@ -46,5 +46,7 @@ func registerTasks(ctx context.Context) {
 	// 示例任务：每小时执行一次
 	cron.Add(ctx, "0 * * * *", jobs.HourlyJob, "hourly_task")
 	
+	// 每天0点重置已推送记录
+	cron.Add(ctx, "0 0 * * *", jobs.ResetDailySentPoolsJob, "reset_daily_sent_pools")
 	g.Log().Info(ctx, "定时任务注册完成")
 }

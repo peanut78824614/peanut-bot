@@ -18,14 +18,12 @@ func KyberSwapMonitorJob(ctx context.Context) {
 	kyberSwap := service.KyberSwap()
 	telegram := service.Telegram()
 	
-	// 获取今天已推送的池子ID列表
-	sentPoolIDs, err := kyberSwap.GetTodaySentPoolIDs(ctx)
+	// 获取存储的旧数据
+	oldPools, err := kyberSwap.GetStoredPools(ctx)
 	if err != nil {
-		g.Log().Error(ctx, "获取今天已推送池子列表失败:", err)
-		sentPoolIDs = make(map[string]bool) // 使用空map继续执行
+		g.Log().Error(ctx, "获取存储的池子数据失败:", err)
+		oldPools = []model.Pool{} // 使用空列表继续执行
 	}
-	
-	g.Log().Info(ctx, fmt.Sprintf("今天已推送 %d 个池子", len(sentPoolIDs)))
 	
 	// 获取新数据
 	newPools, err := kyberSwap.FetchAllPools(ctx)
@@ -36,25 +34,30 @@ func KyberSwapMonitorJob(ctx context.Context) {
 	
 	g.Log().Info(ctx, fmt.Sprintf("获取到 %d 个池子数据", len(newPools)))
 	
-	// 找出今天未推送的池子（新增的池子）
-	poolsToNotify := make([]model.Pool, 0)
-	poolIDsToAdd := make([]string, 0)
+	// 判断是否是首次运行（没有旧数据）
+	isFirstRun := len(oldPools) == 0
 	
-	for _, pool := range newPools {
-		// 如果这个池子今天还没有推送过，则加入推送列表
-		if !sentPoolIDs[pool.ID] {
-			poolsToNotify = append(poolsToNotify, pool)
-			poolIDsToAdd = append(poolIDsToAdd, pool.ID)
-		}
+	// 比较数据，找出新增的池子
+	newPoolsList := kyberSwap.ComparePools(oldPools, newPools)
+	
+	// 如果是首次运行，推送所有池子；否则只推送新增的池子
+	poolsToNotify := newPoolsList
+	if isFirstRun && len(newPools) > 0 {
+		g.Log().Info(ctx, "首次运行，将推送所有池子数据")
+		poolsToNotify = newPools
 	}
 	
 	if len(poolsToNotify) > 0 {
-		g.Log().Info(ctx, fmt.Sprintf("发现 %d 个新池子（今天首次出现），准备发送通知", len(poolsToNotify)))
+		messagePrefix := "新池子"
+		if isFirstRun {
+			messagePrefix = "池子"
+		}
+		g.Log().Info(ctx, fmt.Sprintf("发现 %d 个%s，准备发送通知", len(poolsToNotify), messagePrefix))
 		
 		// 发送到 Telegram
 		telegramChatId := g.Cfg().MustGet(ctx, "telegram.chatId", "").String()
 		if telegramChatId != "" {
-			message := service.FormatPoolsMessage(poolsToNotify, false)
+			message := service.FormatPoolsMessage(poolsToNotify, isFirstRun)
 			
 			// 如果消息太长，分批发送
 			maxLength := 4096 // Telegram 消息最大长度
@@ -78,21 +81,14 @@ func KyberSwapMonitorJob(ctx context.Context) {
 					g.Log().Info(ctx, "Telegram 消息发送成功")
 				}
 			}
-			
-			// 记录已推送的池子ID到今天的记录中
-			if err := kyberSwap.AddSentPoolIDs(ctx, poolIDsToAdd); err != nil {
-				g.Log().Error(ctx, "保存已推送池子ID失败:", err)
-			} else {
-				g.Log().Info(ctx, fmt.Sprintf("已记录 %d 个池子ID到今天推送历史", len(poolIDsToAdd)))
-			}
 		} else {
 			g.Log().Warning(ctx, "Telegram Chat ID 未配置，跳过 Telegram 通知")
 		}
 	} else {
-		g.Log().Info(ctx, "今天所有池子都已推送过，没有新池子")
+		g.Log().Info(ctx, "没有发现新池子")
 	}
 	
-	// 保存最新的池子数据（用于其他用途，不用于推送判断）
+	// 保存新数据
 	if err := kyberSwap.SavePools(ctx, newPools); err != nil {
 		g.Log().Error(ctx, "保存池子数据失败:", err)
 	} else {
@@ -135,17 +131,4 @@ func splitMessage(text string, maxLength int) []string {
 	}
 	
 	return messages
-}
-
-// ResetDailySentPoolsJob 每天0点重置已推送池子记录
-func ResetDailySentPoolsJob(ctx context.Context) {
-	g.Log().Info(ctx, "开始执行每日重置已推送池子记录任务...")
-	
-	kyberSwap := service.KyberSwap()
-	
-	if err := kyberSwap.ResetDailySentPools(ctx); err != nil {
-		g.Log().Error(ctx, "重置每日已推送池子记录失败:", err)
-	} else {
-		g.Log().Info(ctx, "每日已推送池子记录重置成功")
-	}
 }

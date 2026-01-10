@@ -20,6 +20,9 @@ type IKyberSwap interface {
 	GetStoredPools(ctx context.Context) ([]model.Pool, error)
 	SavePools(ctx context.Context, pools []model.Pool) error
 	ComparePools(oldPools, newPools []model.Pool) []model.Pool
+	GetTodaySentPoolIDs(ctx context.Context) (map[string]bool, error)
+	AddSentPoolIDs(ctx context.Context, poolIDs []string) error
+	ResetDailySentPools(ctx context.Context) error
 }
 
 type kyberSwapImpl struct{}
@@ -279,15 +282,6 @@ func formatTVL(tvl float64) string {
 
 // FormatPoolMessage 格式化池子消息用于 Telegram
 func FormatPoolMessage(pool model.Pool) string {
-	var chainName string
-	switch pool.ChainID {
-	case 56:
-		chainName = "BSC"
-	case 8453:
-		chainName = "Base"
-	default:
-		chainName = fmt.Sprintf("Chain %d", pool.ChainID)
-	}
 	
 	// APR 颜色标签
 	var aprColor string
@@ -319,9 +313,7 @@ func FormatPoolMessage(pool model.Pool) string {
 		feeText = "N/A"
 	}
 	
-	// 注意：图片会在发送时单独生成和发送，这里不包含图片内容
-	
-	// 详细信息块（图片下方）
+	// 详细信息块
 	builder.WriteString(fmt.Sprintf("🌐 *代币名称:* %s\n\n", tokenPair))
 	builder.WriteString(fmt.Sprintf("📈 *APR:* %s %s\n\n", aprColor, formatAPR(pool.APR)))
 	builder.WriteString(fmt.Sprintf("💰 *费率:* %s\n\n", feeText))
@@ -577,4 +569,98 @@ func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 	}
 	
 	return pool
+}
+
+// GetTodaySentPoolIDs 获取今天已推送的池子ID列表
+func (s *kyberSwapImpl) GetTodaySentPoolIDs(ctx context.Context) (map[string]bool, error) {
+	today := time.Now().Format("2006-01-02")
+	filePath := fmt.Sprintf("data/sent_pools_%s.json", today)
+	
+	if !gfile.Exists(filePath) {
+		return make(map[string]bool), nil
+	}
+	
+	content := gfile.GetContents(filePath)
+	if content == "" || content == "[]" {
+		return make(map[string]bool), nil
+	}
+	
+	var poolIDs []string
+	if err := json.Unmarshal([]byte(content), &poolIDs); err != nil {
+		return nil, err
+	}
+	
+	poolIDMap := make(map[string]bool)
+	for _, id := range poolIDs {
+		poolIDMap[id] = true
+	}
+	
+	return poolIDMap, nil
+}
+
+// AddSentPoolIDs 添加已推送的池子ID到今天的记录中
+func (s *kyberSwapImpl) AddSentPoolIDs(ctx context.Context, poolIDs []string) error {
+	if len(poolIDs) == 0 {
+		return nil
+	}
+	
+	today := time.Now().Format("2006-01-02")
+	filePath := fmt.Sprintf("data/sent_pools_%s.json", today)
+	
+	// 获取今天已有的池子ID
+	existingMap, err := s.GetTodaySentPoolIDs(ctx)
+	if err != nil {
+		return err
+	}
+	
+	// 添加新的池子ID（去重）
+	for _, id := range poolIDs {
+		existingMap[id] = true
+	}
+	
+	// 转换为数组
+	allIDs := make([]string, 0, len(existingMap))
+	for id := range existingMap {
+		allIDs = append(allIDs, id)
+	}
+	
+	// 确保目录存在
+	dir := gfile.Dir(filePath)
+	if !gfile.Exists(dir) {
+		if err := gfile.Mkdir(dir); err != nil {
+			return err
+		}
+	}
+	
+	// 保存到文件
+	data, err := json.MarshalIndent(allIDs, "", "  ")
+	if err != nil {
+		return err
+	}
+	
+	return gfile.PutContents(filePath, string(data))
+}
+
+// ResetDailySentPools 重置每天的已推送记录（在每天0点执行）
+func (s *kyberSwapImpl) ResetDailySentPools(ctx context.Context) error {
+	// 获取今天的日期，清空今天的已推送记录
+	today := time.Now().Format("2006-01-02")
+	filePath := fmt.Sprintf("data/sent_pools_%s.json", today)
+	
+	// 确保目录存在
+	dir := gfile.Dir(filePath)
+	if !gfile.Exists(dir) {
+		if err := gfile.Mkdir(dir); err != nil {
+			return err
+		}
+	}
+	
+	// 重置文件为空数组
+	emptyData := "[]"
+	if err := gfile.PutContents(filePath, emptyData); err != nil {
+		return err
+	}
+	
+	g.Log().Info(ctx, fmt.Sprintf("重置今天的已推送记录: %s", filePath))
+	return nil
 }
