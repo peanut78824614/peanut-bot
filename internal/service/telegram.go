@@ -19,7 +19,9 @@ import (
 type ITelegram interface {
 	SendMessage(ctx context.Context, chatID, text string) error
 	SendMessageWithMarkdown(ctx context.Context, chatID, text string) error
+	SendMessageWithMarkdownAndButton(ctx context.Context, chatID, text, buttonText, buttonURL string) error
 	SendPhoto(ctx context.Context, chatID string, photoPath string, caption string) error
+	SendPhotoByURL(ctx context.Context, chatID string, photoURL string, caption string) error
 	GetUpdates(ctx context.Context) ([]Update, error)
 	GetChatInfo(ctx context.Context, chatID string) (*ChatInfo, error)
 }
@@ -85,74 +87,150 @@ func Telegram() ITelegram {
 
 // SendMessage 发送普通消息
 func (s *telegramImpl) SendMessage(ctx context.Context, chatID, text string) error {
-	return s.sendMessage(ctx, chatID, text, false)
+	return s.sendMessage(ctx, chatID, text, false, "", "")
 }
 
 // SendMessageWithMarkdown 发送 Markdown 格式消息
 func (s *telegramImpl) SendMessageWithMarkdown(ctx context.Context, chatID, text string) error {
-	return s.sendMessage(ctx, chatID, text, true)
+	return s.sendMessage(ctx, chatID, text, true, "", "")
 }
 
-// sendMessage 发送消息的内部实现
-func (s *telegramImpl) sendMessage(ctx context.Context, chatID, text string, parseMode bool) error {
+// SendMessageWithMarkdownAndButton 发送 Markdown 消息并在底部带一条宽链接按钮
+func (s *telegramImpl) SendMessageWithMarkdownAndButton(ctx context.Context, chatID, text, buttonText, buttonURL string) error {
+	return s.sendMessage(ctx, chatID, text, true, buttonText, buttonURL)
+}
+
+// telegramSendBody 用于 JSON 方式发送带按钮的消息，保证 reply_markup 正确传递
+type telegramSendBody struct {
+	ChatID                string                 `json:"chat_id"`
+	Text                  string                 `json:"text"`
+	ParseMode             string                 `json:"parse_mode,omitempty"`
+	DisableWebPagePreview bool                   `json:"disable_web_page_preview,omitempty"`
+	ReplyMarkup           *telegramInlineKeyboard `json:"reply_markup,omitempty"`
+}
+type telegramInlineKeyboard struct {
+	InlineKeyboard [][]telegramInlineButton `json:"inline_keyboard"`
+}
+type telegramInlineButton struct {
+	Text string `json:"text"`
+	URL  string `json:"url,omitempty"`
+}
+
+// sendMessage 发送消息的内部实现；buttonText/buttonURL 非空时附加底部 InlineKeyboard URL 按钮
+// 带按钮时使用 JSON 请求体，避免 form 编码导致 reply_markup 被丢弃或解析失败
+// 遇 connection reset / timeout 等网络瞬时错误时自动重试最多 3 次
+func (s *telegramImpl) sendMessage(ctx context.Context, chatID, text string, parseMode bool, buttonText, buttonURL string) error {
 	if s.botToken == "" {
 		return fmt.Errorf("Telegram bot token 未配置")
 	}
-	
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", s.botToken)
-	
-	params := url.Values{}
-	params.Set("chat_id", chatID)
-	params.Set("text", text)
-	if parseMode {
-		params.Set("parse_mode", "Markdown")
-	}
-	params.Set("disable_web_page_preview", "false")
-	
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(params.Encode()))
-	if err != nil {
-		return err
-	}
-	
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-	
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	
-	if resp.StatusCode != http.StatusOK {
-		var errorResp struct {
-			Description string `json:"description"`
+	var bodyBytes []byte
+	if buttonText != "" && buttonURL != "" {
+		body := telegramSendBody{
+			ChatID:                chatID,
+			Text:                  text,
+			ParseMode:             "Markdown",
+			DisableWebPagePreview: false,
+			ReplyMarkup: &telegramInlineKeyboard{
+				InlineKeyboard: [][]telegramInlineButton{
+					{{Text: buttonText, URL: buttonURL}},
+				},
+			},
 		}
-		if err := json.Unmarshal(body, &errorResp); err == nil {
-			return fmt.Errorf("Telegram API 错误: %s", errorResp.Description)
+		if !parseMode {
+			body.ParseMode = ""
 		}
-		return fmt.Errorf("Telegram API 错误: HTTP %d", resp.StatusCode)
+		var err error
+		bodyBytes, err = json.Marshal(body)
+		if err != nil {
+			return err
+		}
+	} else {
+		params := url.Values{}
+		params.Set("chat_id", chatID)
+		params.Set("text", text)
+		if parseMode {
+			params.Set("parse_mode", "Markdown")
+		}
+		params.Set("disable_web_page_preview", "false")
+		bodyBytes = []byte(params.Encode())
 	}
-	
-	var result struct {
-		OK bool `json:"ok"`
+	client := &http.Client{Timeout: 45 * time.Second}
+	const maxRetries = 3
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+		contentType := "application/x-www-form-urlencoded"
+		if buttonText != "" && buttonURL != "" {
+			contentType = "application/json"
+		}
+		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(bodyBytes))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("Content-Type", contentType)
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			if isRetriableNetworkError(err) && attempt < maxRetries-1 {
+				g.Log().Warning(ctx, fmt.Sprintf("Telegram 发送网络错误，第 %d 次重试: %v", attempt+1, err))
+				continue
+			}
+			return err
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			var errorResp struct {
+				Description string `json:"description"`
+			}
+			if json.Unmarshal(body, &errorResp) == nil {
+				lastErr = fmt.Errorf("Telegram API 错误: %s", errorResp.Description)
+			} else {
+				lastErr = fmt.Errorf("Telegram API 错误: HTTP %d", resp.StatusCode)
+			}
+			continue
+		}
+		var result struct {
+			OK bool `json:"ok"`
+		}
+		if json.Unmarshal(body, &result) != nil || !result.OK {
+			lastErr = fmt.Errorf("Telegram API 返回失败")
+			continue
+		}
+		return nil
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return err
+	if lastErr != nil {
+		return lastErr
 	}
-	
-	if !result.OK {
-		return fmt.Errorf("Telegram API 返回失败")
+	return fmt.Errorf("Telegram 发送失败，已重试 %d 次", maxRetries)
+}
+
+// isRetriableNetworkError 判断是否为可重试的网络错误（连接被重置、超时等）
+func isRetriableNetworkError(err error) bool {
+	if err == nil {
+		return false
 	}
-	
-	return nil
+	s := err.Error()
+	return strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "timeout") ||
+		strings.Contains(s, "EOF") ||
+		strings.Contains(s, "TLS handshake")
+}
+
+// escapeJSONString 转义 JSON 字符串中的 \ 和 "
+func escapeJSONString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
 }
 
 // GetUpdates 获取 Telegram 更新
@@ -256,7 +334,56 @@ func (s *telegramImpl) GetChatInfo(ctx context.Context, chatID string) (*ChatInf
 	return &result.Result, nil
 }
 
-// SendPhoto 发送图片到Telegram
+// SendPhotoByURL 通过图片 URL 发送图片到 Telegram（Telegram 会从该 URL 拉取图片）
+func (s *telegramImpl) SendPhotoByURL(ctx context.Context, chatID string, photoURL string, caption string) error {
+	if s.botToken == "" {
+		return fmt.Errorf("Telegram bot token 未配置")
+	}
+	if photoURL == "" {
+		return fmt.Errorf("图片 URL 不能为空")
+	}
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendPhoto", s.botToken)
+	params := url.Values{}
+	params.Set("chat_id", chatID)
+	params.Set("photo", photoURL)
+	if caption != "" {
+		params.Set("caption", caption)
+		params.Set("parse_mode", "Markdown")
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(params.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		var errorResp struct {
+			Description string `json:"description"`
+		}
+		if json.Unmarshal(body, &errorResp) == nil {
+			return fmt.Errorf("Telegram API 错误: %s", errorResp.Description)
+		}
+		return fmt.Errorf("Telegram API 错误: HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if json.Unmarshal(body, &result) != nil || !result.OK {
+		return fmt.Errorf("Telegram API 返回失败")
+	}
+	return nil
+}
+
+// SendPhoto 发送图片到Telegram（本地文件路径）
 func (s *telegramImpl) SendPhoto(ctx context.Context, chatID string, photoPath string, caption string) error {
 	if s.botToken == "" {
 		return fmt.Errorf("Telegram bot token 未配置")

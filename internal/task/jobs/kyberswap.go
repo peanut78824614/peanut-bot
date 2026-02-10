@@ -55,24 +55,29 @@ func KyberSwapMonitorJob(ctx context.Context) {
 		telegramChatId := g.Cfg().MustGet(ctx, "telegram.chatId", "").String()
 		if telegramChatId != "" {
 			message := service.FormatPoolsMessage(poolsToNotify, false)
-			
-			// 如果消息太长，分批发送
-			maxLength := 4096 // Telegram 消息最大长度
+			buttonText := "联系作者 VX : love-home8"
+			buttonURL := "https://www.baidu.com"
+			maxLength := 4096
 			if len(message) > maxLength {
-				// 分批发送
 				messages := splitMessage(message, maxLength)
-				for _, msg := range messages {
-					if err := telegram.SendMessageWithMarkdown(ctx, telegramChatId, msg); err != nil {
-						g.Log().Error(ctx, "发送 Telegram 消息失败:", err)
+				for i, msg := range messages {
+					if i == 0 {
+						if err := telegram.SendMessageWithMarkdownAndButton(ctx, telegramChatId, msg, buttonText, buttonURL); err != nil {
+							g.Log().Error(ctx, "发送 Telegram 消息失败:", err)
+						} else {
+							g.Log().Info(ctx, "Telegram 消息发送成功")
+						}
 					} else {
-						g.Log().Info(ctx, "Telegram 消息发送成功")
+						if err := telegram.SendMessageWithMarkdown(ctx, telegramChatId, msg); err != nil {
+							g.Log().Error(ctx, "发送 Telegram 消息失败:", err)
+						} else {
+							g.Log().Info(ctx, "Telegram 消息发送成功")
+						}
 					}
-					// 避免发送过快
 					time.Sleep(1 * time.Second)
 				}
 			} else {
-				// 发送单个消息
-				if err := telegram.SendMessageWithMarkdown(ctx, telegramChatId, message); err != nil {
+				if err := telegram.SendMessageWithMarkdownAndButton(ctx, telegramChatId, message, buttonText, buttonURL); err != nil {
 					g.Log().Error(ctx, "发送 Telegram 消息失败:", err)
 				} else {
 					g.Log().Info(ctx, "Telegram 消息发送成功")

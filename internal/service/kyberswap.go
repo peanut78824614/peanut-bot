@@ -1,5 +1,4 @@
 package service
-
 import (
 	"context"
 	"data/internal/model"
@@ -9,11 +8,9 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gfile"
 )
-
 type IKyberSwap interface {
 	FetchPools(ctx context.Context, page int) ([]model.Pool, error)
 	FetchAllPools(ctx context.Context) ([]model.Pool, error)
@@ -24,23 +21,20 @@ type IKyberSwap interface {
 	AddSentPoolIDs(ctx context.Context, poolIDs []string) error
 	ResetDailySentPools(ctx context.Context) error
 }
-
 type kyberSwapImpl struct{}
-
 var kyberSwapService = kyberSwapImpl{}
-
 // KyberSwap 获取 KyberSwap 服务实例
 func KyberSwap() IKyberSwap {
 	return &kyberSwapService
 }
+// earnServicePoolsURL Kyber Earn 池子列表 API（接口可能较慢，超时时间较长）
+const earnServicePoolsURL = "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=8453%%2C56&page=%d&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q="
 
-// FetchPools 获取指定页面的池子数据
+// FetchPools 获取指定页面的池子数据（仅保留 tokens 中 symbol 不包含 WETH 的池子）
 func (s *kyberSwapImpl) FetchPools(ctx context.Context, page int) ([]model.Pool, error) {
-	// KyberSwap API 端点
-	url := fmt.Sprintf("https://zap-earn-service-v3.kyberengineering.io/api/v1/explorer/pools?chainIds=56%%2C8453&page=%d&limit=10&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q=", page)
-	
+	url := fmt.Sprintf(earnServicePoolsURL, page)
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 90 * time.Second, // 接口可能较慢，延长等待
 	}
 	
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -172,37 +166,10 @@ func (s *kyberSwapImpl) FetchPools(ctx context.Context, page int) ([]model.Pool,
 	
 	return pools, nil
 }
-
-
-// FetchAllPools 获取所有页面的池子数据（page 1-10）
+// FetchAllPools 获取池子数据（仅拉取 page=1）
 func (s *kyberSwapImpl) FetchAllPools(ctx context.Context) ([]model.Pool, error) {
-	allPools := make([]model.Pool, 0)
-	poolMap := make(map[string]bool) // 用于去重
-	
-	for page := 1; page <= 10; page++ {
-		g.Log().Info(ctx, fmt.Sprintf("正在获取第 %d 页数据...", page))
-		
-		pools, err := s.FetchPools(ctx, page)
-		if err != nil {
-			g.Log().Error(ctx, fmt.Sprintf("获取第 %d 页数据失败:", page), err)
-			continue
-		}
-		
-		// 去重
-		for _, pool := range pools {
-			if !poolMap[pool.ID] {
-				poolMap[pool.ID] = true
-				allPools = append(allPools, pool)
-			}
-		}
-		
-		// 避免请求过快
-		time.Sleep(500 * time.Millisecond)
-	}
-	
-	return allPools, nil
+	return s.FetchPools(ctx, 1)
 }
-
 // GetStoredPools 获取存储的池子数据
 func (s *kyberSwapImpl) GetStoredPools(ctx context.Context) ([]model.Pool, error) {
 	filePath := "data/kyberswap_pools.json"
@@ -220,7 +187,6 @@ func (s *kyberSwapImpl) GetStoredPools(ctx context.Context) ([]model.Pool, error
 	
 	return pools, nil
 }
-
 // SavePools 保存池子数据
 func (s *kyberSwapImpl) SavePools(ctx context.Context, pools []model.Pool) error {
 	filePath := "data/kyberswap_pools.json"
@@ -240,7 +206,6 @@ func (s *kyberSwapImpl) SavePools(ctx context.Context, pools []model.Pool) error
 	
 	return gfile.PutContents(filePath, string(data))
 }
-
 // ComparePools 比较新旧池子数据，返回新增的池子
 func (s *kyberSwapImpl) ComparePools(oldPools, newPools []model.Pool) []model.Pool {
 	oldMap := make(map[string]bool)
@@ -257,7 +222,6 @@ func (s *kyberSwapImpl) ComparePools(oldPools, newPools []model.Pool) []model.Po
 	
 	return newPoolsList
 }
-
 // formatAPR 格式化 APR
 func formatAPR(apr float64) string {
 	if apr >= 1000 {
@@ -268,7 +232,6 @@ func formatAPR(apr float64) string {
 		return fmt.Sprintf("%.2f%%", apr)
 	}
 }
-
 // formatTVL 格式化 TVL
 func formatTVL(tvl float64) string {
 	if tvl >= 1000000 {
@@ -279,298 +242,231 @@ func formatTVL(tvl float64) string {
 		return fmt.Sprintf("$%.2f", tvl)
 	}
 }
-
-// FormatPoolMessage 格式化池子消息用于 Telegram
-func FormatPoolMessage(pool model.Pool) string {
-	
-	// APR 颜色标签
-	var aprColor string
-	if pool.APR >= 200 {
-		aprColor = "🔥" // 超高
-	} else if pool.APR >= 100 {
-		aprColor = "🟢" // 高
-	} else if pool.APR >= 50 {
-		aprColor = "🟡" // 中等
-	} else {
-		aprColor = "⚪" // 普通
+// exchangeToShort 将 API 的 exchange 转为短名（如 univ4）
+func exchangeToShort(exchange string) string {
+	ex := strings.ToLower(exchange)
+	switch {
+	case strings.Contains(ex, "uniswap-v4"), strings.Contains(ex, "uniswapv4"):
+		return "univ4"
+	case strings.Contains(ex, "uniswap-v3"), strings.Contains(ex, "uniswapv3"):
+		return "univ3"
+	case strings.Contains(ex, "uniswapv2"):
+		return "univ2"
+	case strings.Contains(ex, "pancake-infinity"):
+		return "pancake-infinity"
+	case strings.Contains(ex, "pancake-v3"), strings.Contains(ex, "pancakev3"):
+		return "pv3"
+	case strings.Contains(ex, "pancake"):
+		return "pancake"
+	case strings.Contains(ex, "kyber"):
+		return "kyber"
+	default:
+		if exchange != "" {
+			return exchange
+		}
+		return "未知"
 	}
-	
-	var builder strings.Builder
-	
-	// 顶部警报标题
-	builder.WriteString("🚨🚨 *高APR池子提醒*\n\n")
-	
-	// 图片块（使用代码块模拟图片效果，将所有关键信息放在一起）
-	tokenPair := fmt.Sprintf("%s/%s", pool.Token0Symbol, pool.Token1Symbol)
-	feeText := ""
-	if pool.FeeTier == 1 {
-		feeText = "0.01%"
-	} else if pool.FeeTier == 3 {
-		feeText = "1%"
-	} else if pool.FeeTier > 0 {
-		feeText = fmt.Sprintf("%.2f%%", float64(pool.FeeTier)/100.0)
-	} else {
-		feeText = "N/A"
-	}
-	
-	// 详细信息块
-	builder.WriteString(fmt.Sprintf("🌐 *代币名称:* %s\n\n", tokenPair))
-	builder.WriteString(fmt.Sprintf("📈 *APR:* %s %s\n\n", aprColor, formatAPR(pool.APR)))
-	builder.WriteString(fmt.Sprintf("💰 *费率:* %s\n\n", feeText))
-	builder.WriteString(fmt.Sprintf("💎 *TVL:* %s\n\n", formatTVL(pool.TVL)))
-	if pool.Volume24h > 0 {
-		builder.WriteString(fmt.Sprintf("📊 *24h交易量:* %s\n\n", formatTVL(pool.Volume24h)))
-	}
-	// 手续费字段始终显示
-	if pool.Fees24h > 0 {
-		builder.WriteString(fmt.Sprintf("💵 *24h手续费:* %s\n", formatTVL(pool.Fees24h)))
-	} else {
-		builder.WriteString(fmt.Sprintf("💵 *24h手续费:* $0.00\n"))
-	}
-	
-	return builder.String()
 }
 
-// FormatPoolsMessage 格式化多个池子消息
+// chainNameDisplay 将 chain.name 转为展示用（base -> Base, bsc -> BNB）
+func chainNameDisplay(name string) string {
+	switch strings.ToLower(name) {
+	case "bsc":
+		return "BNB"
+	case "base":
+		return "Base"
+	case "":
+		return "未知"
+	default:
+		if len(name) > 0 {
+			return strings.ToUpper(name[:1]) + strings.ToLower(name[1:])
+		}
+		return name
+	}
+}
+
+// FormatPoolMessage 格式化池子消息用于 Telegram（按约定格式）
+func FormatPoolMessage(pool model.Pool) string {
+	tokenPair := fmt.Sprintf("%s / %s", pool.Token0Symbol, pool.Token1Symbol)
+	if tokenPair == " / " && pool.Name != "" {
+		tokenPair = strings.Replace(pool.Name, "/", " / ", 1)
+	}
+	protocolDisplay := pool.Protocol
+	if protocolDisplay == "" {
+		protocolDisplay = "-"
+	}
+	feeText := fmt.Sprintf("%.2f%%", pool.FeeTier)
+	chainDisplay := chainNameDisplay(pool.ChainName)
+	volText := fmt.Sprintf("$%.2f", pool.Volume24h)
+	feesText := fmt.Sprintf("$%.2f", pool.Fees24h)
+	var b strings.Builder
+	// 重点字段用 *粗体* 高亮
+	b.WriteString(fmt.Sprintf("🌐 *代币名称*：*%s*\n\n", tokenPair))
+	b.WriteString(fmt.Sprintf("🌉 来源: %s\n\n", chainDisplay))
+	b.WriteString(fmt.Sprintf("📈 APR: 🔥 %s\n\n", formatAPR(pool.APR)))
+	b.WriteString(fmt.Sprintf("📈 协议: %s\n\n", protocolDisplay))
+	b.WriteString(fmt.Sprintf("💰 费率: %s\n\n", feeText))
+	b.WriteString(fmt.Sprintf("💎 TVL: %s\n\n", formatTVL(pool.TVL)))
+	b.WriteString(fmt.Sprintf("📊 *24h交易量*：*%s*\n\n", volText))
+	b.WriteString(fmt.Sprintf("💵 *24h手续费*：*%s*\n", feesText))
+	if pool.ContractAddress != "" {
+		b.WriteString(fmt.Sprintf("\n📋 合约地址（长按复制）：\n\n`%s`\n", pool.ContractAddress))
+	}
+	return b.String()
+}
+// FormatPoolsMessage 格式化多个池子消息（带序号与分隔）
+// 发现 1 个新池子时采用 PUMP 金狗提醒格式标题
 func FormatPoolsMessage(pools []model.Pool, isFirstRun bool) string {
 	if len(pools) == 0 {
 		return ""
 	}
-	
 	var builder strings.Builder
-	
-	// 简洁标题
-	if isFirstRun {
-		builder.WriteString(fmt.Sprintf("🎉 *首次运行 | %d 个池子*\n\n", len(pools)))
-	} else {
-		builder.WriteString(fmt.Sprintf("✨ *发现 %d 个新池子*\n\n", len(pools)))
-	}
-	
-	// 池子列表 - 每条消息之间用分隔线分隔，不连体
+		// 用全角空格使标题视觉居中（Telegram 无原生居中）
+		builder.WriteString("　　　　🔴🔴  高收益流动性提醒 🔴🔴\n\n")
+		if isFirstRun && len(pools) != 1 {
+			builder.WriteString(fmt.Sprintf("🎉 *首次运行 | %d 个池子*\n\n", len(pools)))
+		} else if !isFirstRun && len(pools) != 1 {
+			builder.WriteString(fmt.Sprintf("✨ *发现 %d 个新池子*\n\n", len(pools)))
+		}
 	for i, pool := range pools {
-		builder.WriteString(fmt.Sprintf("*[%d]*\n\n", i+1))
+		builder.WriteString(fmt.Sprintf("▸ *【%d】*\n\n", i+1))
 		builder.WriteString(FormatPoolMessage(pool))
-		// 在池子之间添加分隔线（最后一个不添加）
 		if i < len(pools)-1 {
-			builder.WriteString("\n━━━━━━━━━━━━━━━━━━━━\n\n")
+			builder.WriteString("\n\n━━━━━━━━━━━━━━━━━━━━\n\n")
 		}
 	}
-	
 	return builder.String()
 }
+// hasWETH 判断 tokens 数组中是否包含 symbol 为 WETH 的代币
+func hasWETH(tokens []interface{}) bool {
+	for _, t := range tokens {
+		m, ok := t.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		sym, _ := m["symbol"].(string)
+		if strings.EqualFold(sym, "WETH") {
+			return true
+		}
+	}
+	return false
+}
 
-// parsePoolFromInterface 从 interface{} 解析池子数据
+// hasUSDTOrUSDC 判断 tokens 中是否包含 USDT 或 USDC（至少一个即可）
+func hasUSDTOrUSDC(tokens []interface{}) bool {
+	for _, t := range tokens {
+		m, ok := t.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		sym, _ := m["symbol"].(string)
+		lower := strings.ToLower(sym)
+		if lower == "usdt" || lower == "usdc" {
+			return true
+		}
+	}
+	return false
+}
+
+// parsePoolFromInterface 从 interface{} 解析池子数据（仅保留 tokens 中 symbol 不包含 WETH 的池子）
+// 字段映射：tvl->TVL, earnFee->Fees24h, feeTier->费率%, liquidity->总流动性, exchange->协议, apr->APR
+// 合约地址取 tokens 中 symbol 不为 USDT/USDC 的 address；代币名称取 tokens 的 symbol
 func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 	poolMap, ok := data.(map[string]interface{})
 	if !ok {
 		return nil
 	}
-	
+
+	tokens, _ := poolMap["tokens"].([]interface{})
+	if len(tokens) < 2 {
+		return nil
+	}
+	if hasWETH(tokens) {
+		return nil // 过滤：排除含 WETH 的池子
+	}
+	if !hasUSDTOrUSDC(tokens) {
+		return nil // 过滤：只推送 tokens 中包含 USDT 或 USDC（至少一个）的池子
+	}
+
 	pool := &model.Pool{}
-	
-	// 解析 ID - 实际API使用 "address" 字段
+
 	if id, ok := poolMap["address"].(string); ok && id != "" {
 		pool.ID = id
 	} else if id, ok := poolMap["id"].(string); ok && id != "" {
 		pool.ID = id
 	} else if id, ok := poolMap["poolId"].(string); ok && id != "" {
 		pool.ID = id
-	} else if id, ok := poolMap["pool_id"].(string); ok && id != "" {
-		pool.ID = id
-	} else if id, ok := poolMap["id"].(float64); ok {
-		pool.ID = fmt.Sprintf("%.0f", id)
-	} else if id, ok := poolMap["poolId"].(float64); ok {
-		pool.ID = fmt.Sprintf("%.0f", id)
 	} else {
-		// ID 是必需的
 		return nil
 	}
-	
-	// 解析名称
-	if name, ok := poolMap["name"].(string); ok {
-		pool.Name = name
-	} else if token0, ok := poolMap["token0"].(map[string]interface{}); ok {
-		if token1, ok := poolMap["token1"].(map[string]interface{}); ok {
-			symbol0, _ := token0["symbol"].(string)
-			symbol1, _ := token1["symbol"].(string)
-			pool.Name = fmt.Sprintf("%s/%s", symbol0, symbol1)
-		}
-	}
-	
-	// 解析 APR
+
 	if apr, ok := poolMap["apr"].(float64); ok {
 		pool.APR = apr
 	} else if apr, ok := poolMap["apy"].(float64); ok {
 		pool.APR = apr
-	} else if aprStr, ok := poolMap["apr"].(string); ok {
-		fmt.Sscanf(aprStr, "%f", &pool.APR)
 	}
-	
-	// 解析 TVL
 	if tvl, ok := poolMap["tvl"].(float64); ok {
 		pool.TVL = tvl
-	} else if tvl, ok := poolMap["totalValueLocked"].(float64); ok {
-		pool.TVL = tvl
-	} else if tvlStr, ok := poolMap["tvl"].(string); ok {
-		fmt.Sscanf(tvlStr, "%f", &pool.TVL)
 	}
-	
-	// 解析 ChainID
-	if chainId, ok := poolMap["chainId"].(float64); ok {
-		pool.ChainID = int(chainId)
-	} else if chainId, ok := poolMap["chainId"].(int); ok {
-		pool.ChainID = chainId
-	} else if chainId, ok := poolMap["chain_id"].(float64); ok {
-		pool.ChainID = int(chainId)
+	if liq, ok := poolMap["liquidity"].(float64); ok {
+		pool.Liquidity = liq
 	}
-	
-	// 解析 Token0 和 Token1 - 实际API使用 "tokens" 数组
-	if tokens, ok := poolMap["tokens"].([]interface{}); ok && len(tokens) >= 2 {
-		// Token0
-		if token0, ok := tokens[0].(map[string]interface{}); ok {
-			if addr, ok := token0["address"].(string); ok {
-				pool.Token0 = addr
-			}
-			if symbol, ok := token0["symbol"].(string); ok {
-				pool.Token0Symbol = symbol
-			}
-		}
-		// Token1
-		if token1, ok := tokens[1].(map[string]interface{}); ok {
-			if addr, ok := token1["address"].(string); ok {
-				pool.Token1 = addr
-			}
-			if symbol, ok := token1["symbol"].(string); ok {
-				pool.Token1Symbol = symbol
-			}
-		}
-		// 生成名称
-		if pool.Name == "" && pool.Token0Symbol != "" && pool.Token1Symbol != "" {
-			pool.Name = fmt.Sprintf("%s/%s", pool.Token0Symbol, pool.Token1Symbol)
-		}
-	} else {
-		// 兼容旧格式：token0 和 token1 对象
-		if token0, ok := poolMap["token0"].(map[string]interface{}); ok {
-			if addr, ok := token0["address"].(string); ok {
-				pool.Token0 = addr
-			}
-			if symbol, ok := token0["symbol"].(string); ok {
-				pool.Token0Symbol = symbol
-			}
-		}
-		if token1, ok := poolMap["token1"].(map[string]interface{}); ok {
-			if addr, ok := token1["address"].(string); ok {
-				pool.Token1 = addr
-			}
-			if symbol, ok := token1["symbol"].(string); ok {
-				pool.Token1Symbol = symbol
-			}
-		}
+	if vol, ok := poolMap["volume"].(float64); ok {
+		pool.Volume24h = vol
 	}
-	
-	// 解析 Volume24h
-	if volume, ok := poolMap["volume24h"].(float64); ok {
-		pool.Volume24h = volume
-	} else if volume, ok := poolMap["volume24H"].(float64); ok {
-		pool.Volume24h = volume
-	} else if volume, ok := poolMap["volume"].(float64); ok {
-		pool.Volume24h = volume
+	if earnFee, ok := poolMap["earnFee"].(float64); ok {
+		pool.Fees24h = earnFee
 	}
-	
-	// 解析 Fees24h
-	if fees, ok := poolMap["fees24h"].(float64); ok {
-		pool.Fees24h = fees
-	} else if fees, ok := poolMap["fees24H"].(float64); ok {
-		pool.Fees24h = fees
-	} else if fees, ok := poolMap["fees"].(float64); ok {
-		pool.Fees24h = fees
-	}
-	
-	// 解析协议信息 - 实际API使用 "exchange" 字段
-	if exchange, ok := poolMap["exchange"].(string); ok {
-		// 标准化协议名称
-		exchangeLower := strings.ToLower(exchange)
-		if strings.Contains(exchangeLower, "uniswap-v4") || strings.Contains(exchangeLower, "uniswapv4") {
-			pool.Protocol = "Uniswap"
-			pool.Version = "v4"
-		} else if strings.Contains(exchangeLower, "uniswap-v3") || strings.Contains(exchangeLower, "uniswapv3") {
-			pool.Protocol = "Uniswap"
-			pool.Version = "v3"
-		} else if strings.Contains(exchangeLower, "pancake-v3") || strings.Contains(exchangeLower, "pancakev3") {
-			pool.Protocol = "Pancake"
-			pool.Version = "v3"
-		} else if strings.Contains(exchangeLower, "pancake-infinity") || strings.Contains(exchangeLower, "pancake-infinity-cl") {
-			pool.Protocol = "Pancake"
-			pool.Version = "v3" // Pancake Infinity 通常视为 v3
-		} else if strings.Contains(exchangeLower, "kyber") {
-			pool.Protocol = "KyberSwap"
-		} else {
-			pool.Protocol = exchange // 使用原始值
-		}
-	} else if protocol, ok := poolMap["protocol"].(string); ok {
-		pool.Protocol = protocol
-	} else if protocol, ok := poolMap["protocolName"].(string); ok {
-		pool.Protocol = protocol
-	} else {
-		pool.Protocol = "" // 未知协议
-	}
-	
-	// 解析版本信息
-	if version, ok := poolMap["version"].(string); ok {
-		pool.Version = version
-	} else if version, ok := poolMap["poolVersion"].(string); ok {
-		pool.Version = version
-	} else if version, ok := poolMap["v"].(string); ok {
-		pool.Version = version
-	} else {
-		// 尝试从 ID 或名称中提取版本信息
-		idLower := strings.ToLower(pool.ID)
-		nameLower := strings.ToLower(pool.Name)
-		if strings.Contains(idLower, "v4") || strings.Contains(nameLower, "v4") {
-			pool.Version = "v4"
-		} else if strings.Contains(idLower, "v3") || strings.Contains(nameLower, "v3") {
-			pool.Version = "v3"
-		} else {
-			pool.Version = "v3" // 默认 v3
-		}
-	}
-	
-	// 解析费率等级 - 实际API的 feeTier 可能是小数，需要映射
 	if feeTier, ok := poolMap["feeTier"].(float64); ok {
-		// 根据费率值映射到标准费率等级
-		// 0.01% -> 1, 1% -> 3, 其他值保持原值或映射
-		if feeTier >= 0.009 && feeTier <= 0.011 {
-			pool.FeeTier = 1 // 0.01%
-		} else if feeTier >= 0.99 && feeTier <= 1.01 {
-			pool.FeeTier = 3 // 1%
-		} else {
-			pool.FeeTier = int(feeTier) // 其他值直接转换
-		}
-	} else if feeTier, ok := poolMap["feeTier"].(int); ok {
 		pool.FeeTier = feeTier
-	} else if feeTier, ok := poolMap["fee_tier"].(float64); ok {
-		pool.FeeTier = int(feeTier)
-	} else if fee, ok := poolMap["fee"].(float64); ok {
-		// 如果提供的是费率百分比，转换为费率等级
-		if fee == 0.01 {
-			pool.FeeTier = 1
-		} else if fee == 1.0 {
-			pool.FeeTier = 3
-		} else {
-			pool.FeeTier = int(fee)
-		}
-	} else {
-		pool.FeeTier = 0 // 未知
+	} else if feeTier, ok := poolMap["feeTier"].(int); ok {
+		pool.FeeTier = float64(feeTier)
 	}
-	
-	// 生成 URL
+	if exchange, ok := poolMap["exchange"].(string); ok {
+		pool.Protocol = exchange
+	}
+	if chain, ok := poolMap["chain"].(map[string]interface{}); ok {
+		if id, ok := chain["id"].(float64); ok {
+			pool.ChainID = int(id)
+		}
+		if name, ok := chain["name"].(string); ok {
+			pool.ChainName = name
+		}
+	} else if chainId, ok := poolMap["chainId"].(float64); ok {
+		pool.ChainID = int(chainId)
+	}
+
+	// tokens: 代币名称用 symbol，合约地址取 symbol 不为 USDT/USDC 的 address
+	var syms []string
+	for i, t := range tokens {
+		m, ok := t.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		addr, _ := m["address"].(string)
+		sym, _ := m["symbol"].(string)
+		syms = append(syms, sym)
+		symLower := strings.ToLower(sym)
+		if symLower != "usdt" && symLower != "usdc" {
+			pool.ContractAddress = addr
+		}
+		if i == 0 {
+			pool.Token0 = addr
+			pool.Token0Symbol = sym
+		} else if i == 1 {
+			pool.Token1 = addr
+			pool.Token1Symbol = sym
+		}
+	}
+	if len(syms) >= 2 {
+		pool.Name = fmt.Sprintf("%s/%s", syms[0], syms[1])
+	}
+
 	if pool.ID != "" {
 		pool.URL = fmt.Sprintf("https://kyberswap.com/earn/pools/%s", pool.ID)
 	}
-	
 	return pool
 }
-
 // GetTodaySentPoolIDs 获取今天已推送的池子ID列表
 func (s *kyberSwapImpl) GetTodaySentPoolIDs(ctx context.Context) (map[string]bool, error) {
 	today := time.Now().Format("2006-01-02")
@@ -597,7 +493,6 @@ func (s *kyberSwapImpl) GetTodaySentPoolIDs(ctx context.Context) (map[string]boo
 	
 	return poolIDMap, nil
 }
-
 // AddSentPoolIDs 添加已推送的池子ID到今天的记录中
 func (s *kyberSwapImpl) AddSentPoolIDs(ctx context.Context, poolIDs []string) error {
 	if len(poolIDs) == 0 {
@@ -640,7 +535,6 @@ func (s *kyberSwapImpl) AddSentPoolIDs(ctx context.Context, poolIDs []string) er
 	
 	return gfile.PutContents(filePath, string(data))
 }
-
 // ResetDailySentPools 重置每天的已推送记录（在每天0点执行）
 func (s *kyberSwapImpl) ResetDailySentPools(ctx context.Context) error {
 	// 获取今天的日期，清空今天的已推送记录
