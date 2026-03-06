@@ -208,8 +208,8 @@ func KyberSwapEarnFeeMonitorJob(ctx context.Context) {
 		// 计算增长比例
 		increaseRatio := (pool.Fees24h - oldEarnFee) / oldEarnFee
 		
-		// 如果增长超过5%（0.05），则推送
-		if increaseRatio >= 0.05 {
+		// 如果增长超过5%（0.05）且24h手续费大于20，则推送
+		if increaseRatio >= 0.05 && pool.Fees24h > 20 {
 			g.Log().Info(ctx, fmt.Sprintf("池子 %s earnFee 从 %.2f 增加到 %.2f，增长 %.2f%%", 
 				pool.ID, oldEarnFee, pool.Fees24h, increaseRatio*100))
 			poolsToNotify = append(poolsToNotify, pool)
