@@ -20,6 +20,8 @@ type IKyberSwap interface {
 	GetTodaySentPoolIDs(ctx context.Context) (map[string]bool, error)
 	AddSentPoolIDs(ctx context.Context, poolIDs []string) error
 	ResetDailySentPools(ctx context.Context) error
+	GetPoolEarnFeeHistory(ctx context.Context) (map[string]float64, error)
+	UpdatePoolEarnFeeHistory(ctx context.Context, poolID string, earnFee float64) error
 }
 type kyberSwapImpl struct{}
 var kyberSwapService = kyberSwapImpl{}
@@ -337,6 +339,59 @@ func FormatPoolsMessage(pools []model.Pool, isFirstRun bool) string {
 	}
 	return builder.String()
 }
+
+// FormatPoolMessageWithHistory 格式化池子消息，显示手续费历史值变化
+func FormatPoolMessageWithHistory(pool model.Pool, oldEarnFee float64) string {
+	tokenPair := fmt.Sprintf("%s / %s", pool.Token0Symbol, pool.Token1Symbol)
+	if tokenPair == " / " && pool.Name != "" {
+		tokenPair = strings.Replace(pool.Name, "/", " / ", 1)
+	}
+	protocolDisplay := pool.Protocol
+	if protocolDisplay == "" {
+		protocolDisplay = "-"
+	}
+	feeText := fmt.Sprintf("%.2f%%", pool.FeeTier)
+	chainDisplay := chainNameDisplay(pool.ChainName)
+	volText := fmt.Sprintf("$%.2f", pool.Volume24h)
+	// 显示原值和现值，例如 100 -> 200
+	feesText := fmt.Sprintf("$%.2f -> $%.2f", oldEarnFee, pool.Fees24h)
+	var b strings.Builder
+	// 重点字段用 *粗体* 高亮
+	b.WriteString(fmt.Sprintf("🌐 *代币名称*：*%s*\n\n", tokenPair))
+	b.WriteString(fmt.Sprintf("🌉 来源: %s\n\n", chainDisplay))
+	b.WriteString(fmt.Sprintf("📈 APR: 🔥 %s\n\n", formatAPR(pool.APR)))
+	b.WriteString(fmt.Sprintf("📈 协议: %s\n\n", protocolDisplay))
+	b.WriteString(fmt.Sprintf("💰 费率: %s\n\n", feeText))
+	b.WriteString(fmt.Sprintf("💎 TVL: %s\n\n", formatTVL(pool.TVL)))
+	b.WriteString(fmt.Sprintf("📊 *24h交易量*：*%s*\n\n", volText))
+	b.WriteString(fmt.Sprintf("💵 *24h手续费*：*%s*\n", feesText))
+	if pool.ContractAddress != "" {
+		b.WriteString(fmt.Sprintf("\n📋 合约地址（长按复制）：\n\n`%s`\n", pool.ContractAddress))
+	}
+	return b.String()
+}
+
+// FormatEarnFeeSurgeMessage 格式化交易额暴增流动性消息
+func FormatEarnFeeSurgeMessage(pools []model.Pool, history map[string]float64) string {
+	if len(pools) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	// 用全角空格使标题视觉居中，使用绿色🟢区分于高收益流动性提醒的红色🔴
+	builder.WriteString("　　　　🟢🟢  交易额暴增流动性 🟢🟢\n\n")
+	if len(pools) != 1 {
+		builder.WriteString(fmt.Sprintf("✨ *发现 %d 个交易额暴增的池子*\n\n", len(pools)))
+	}
+	for i, pool := range pools {
+		builder.WriteString(fmt.Sprintf("▸ *【%d】*\n\n", i+1))
+		oldEarnFee := history[pool.ID]
+		builder.WriteString(FormatPoolMessageWithHistory(pool, oldEarnFee))
+		if i < len(pools)-1 {
+			builder.WriteString("\n\n━━━━━━━━━━━━━━━━━━━━\n\n")
+		}
+	}
+	return builder.String()
+}
 // hasWETH 判断 tokens 数组中是否包含 symbol 为 WETH 的代币
 func hasWETH(tokens []interface{}) bool {
 	for _, t := range tokens {
@@ -557,4 +612,55 @@ func (s *kyberSwapImpl) ResetDailySentPools(ctx context.Context) error {
 	
 	g.Log().Info(ctx, fmt.Sprintf("重置今天的已推送记录: %s", filePath))
 	return nil
+}
+
+// GetPoolEarnFeeHistory 获取所有池子的 earnFee 历史值
+func (s *kyberSwapImpl) GetPoolEarnFeeHistory(ctx context.Context) (map[string]float64, error) {
+	filePath := "data/pool_earn_fee_history.json"
+	
+	if !gfile.Exists(filePath) {
+		return make(map[string]float64), nil
+	}
+	
+	content := gfile.GetContents(filePath)
+	if content == "" || content == "{}" {
+		return make(map[string]float64), nil
+	}
+	
+	var history map[string]float64
+	if err := json.Unmarshal([]byte(content), &history); err != nil {
+		return nil, err
+	}
+	
+	return history, nil
+}
+
+// UpdatePoolEarnFeeHistory 更新指定池子的 earnFee 历史值
+func (s *kyberSwapImpl) UpdatePoolEarnFeeHistory(ctx context.Context, poolID string, earnFee float64) error {
+	filePath := "data/pool_earn_fee_history.json"
+	
+	// 获取现有的历史值
+	history, err := s.GetPoolEarnFeeHistory(ctx)
+	if err != nil {
+		return err
+	}
+	
+	// 更新指定池子的值
+	history[poolID] = earnFee
+	
+	// 确保目录存在
+	dir := gfile.Dir(filePath)
+	if !gfile.Exists(dir) {
+		if err := gfile.Mkdir(dir); err != nil {
+			return err
+		}
+	}
+	
+	// 保存到文件
+	data, err := json.MarshalIndent(history, "", "  ")
+	if err != nil {
+		return err
+	}
+	
+	return gfile.PutContents(filePath, string(data))
 }
