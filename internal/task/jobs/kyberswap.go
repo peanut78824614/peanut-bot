@@ -171,8 +171,8 @@ func KyberSwapEarnFeeMonitorJob(ctx context.Context) {
 	
 	g.Log().Info(ctx, fmt.Sprintf("获取到 %d 个池子数据", len(newPools)))
 	
-	// 获取历史 earnFee 值
-	history, err := kyberSwap.GetPoolEarnFeeHistory(ctx)
+	// 获取历史 earnFee 值（带时间戳）
+	history, err := kyberSwap.GetPoolEarnFeeHistoryWithTime(ctx)
 	if err != nil {
 		g.Log().Error(ctx, "获取 earnFee 历史值失败:", err)
 		return
@@ -180,11 +180,12 @@ func KyberSwapEarnFeeMonitorJob(ctx context.Context) {
 	
 	// 找出 earnFee 有明显增加的池子
 	poolsToNotify := make([]model.Pool, 0)
-	// 保存需要推送的池子的历史值，用于显示原值和现值
-	poolsHistory := make(map[string]float64)
+	// 保存需要推送的池子的历史值（带时间戳），用于显示原值和现值
+	poolsHistory := make(map[string]service.EarnFeeHistory)
 	
 	for _, pool := range newPools {
-		oldEarnFee, exists := history[pool.ID]
+		historyItem, exists := history[pool.ID]
+		oldEarnFee := historyItem.Value
 		
 		// 如果历史值不存在，记录当前值但不推送
 		if !exists {
@@ -213,8 +214,8 @@ func KyberSwapEarnFeeMonitorJob(ctx context.Context) {
 			g.Log().Info(ctx, fmt.Sprintf("池子 %s earnFee 从 %.2f 增加到 %.2f，增长 %.2f%%", 
 				pool.ID, oldEarnFee, pool.Fees24h, increaseRatio*100))
 			poolsToNotify = append(poolsToNotify, pool)
-			// 保存历史值，用于显示
-			poolsHistory[pool.ID] = oldEarnFee
+			// 保存历史值（带时间戳），用于显示
+			poolsHistory[pool.ID] = historyItem
 		}
 		
 		// 更新历史值

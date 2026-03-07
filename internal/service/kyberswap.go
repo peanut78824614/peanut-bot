@@ -21,8 +21,15 @@ type IKyberSwap interface {
 	AddSentPoolIDs(ctx context.Context, poolIDs []string) error
 	ResetDailySentPools(ctx context.Context) error
 	GetPoolEarnFeeHistory(ctx context.Context) (map[string]float64, error)
+	GetPoolEarnFeeHistoryWithTime(ctx context.Context) (map[string]EarnFeeHistory, error)
 	UpdatePoolEarnFeeHistory(ctx context.Context, poolID string, earnFee float64) error
 }
+// EarnFeeHistory 存储 earnFee 历史值和时间戳
+type EarnFeeHistory struct {
+	Value     float64   `json:"value"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 type kyberSwapImpl struct{}
 var kyberSwapService = kyberSwapImpl{}
 // KyberSwap 获取 KyberSwap 服务实例
@@ -340,8 +347,32 @@ func FormatPoolsMessage(pools []model.Pool, isFirstRun bool) string {
 	return builder.String()
 }
 
-// FormatPoolMessageWithHistory 格式化池子消息，显示手续费历史值变化
-func FormatPoolMessageWithHistory(pool model.Pool, oldEarnFee float64) string {
+// formatDuration 格式化时间间隔为可读字符串
+// 不足1分钟显示秒数，不足1小时显示分钟数，超过1小时显示小时数
+func formatDuration(d time.Duration) string {
+	seconds := int(d.Seconds())
+	minutes := int(d.Minutes())
+	hours := int(d.Hours())
+	
+	// 不足1分钟，显示秒数
+	if minutes < 1 {
+		if seconds < 1 {
+			return "1秒内"
+		}
+		return fmt.Sprintf("%d秒内", seconds)
+	}
+	
+	// 不足1小时，显示分钟数
+	if hours < 1 {
+		return fmt.Sprintf("%d分钟内", minutes)
+	}
+	
+	// 超过1小时，显示小时数
+	return fmt.Sprintf("%d小时内", hours)
+}
+
+// FormatPoolMessageWithHistory 格式化池子消息，显示手续费历史值变化和时间间隔
+func FormatPoolMessageWithHistory(pool model.Pool, oldEarnFee float64, oldTimestamp time.Time) string {
 	tokenPair := fmt.Sprintf("%s / %s", pool.Token0Symbol, pool.Token1Symbol)
 	if tokenPair == " / " && pool.Name != "" {
 		tokenPair = strings.Replace(pool.Name, "/", " / ", 1)
@@ -353,8 +384,14 @@ func FormatPoolMessageWithHistory(pool model.Pool, oldEarnFee float64) string {
 	feeText := fmt.Sprintf("%.2f%%", pool.FeeTier)
 	chainDisplay := chainNameDisplay(pool.ChainName)
 	volText := fmt.Sprintf("$%.2f", pool.Volume24h)
-	// 显示原值和现值，例如 100 -> 200
-	feesText := fmt.Sprintf("$%.2f -> $%.2f", oldEarnFee, pool.Fees24h)
+	
+	// 计算时间间隔
+	timeDiff := time.Since(oldTimestamp)
+	timeText := formatDuration(timeDiff)
+	
+	// 显示原值和现值，以及时间间隔，例如 $100.00 -> $200.00 (5分钟内)
+	feesText := fmt.Sprintf("$%.2f -> $%.2f (%s)", oldEarnFee, pool.Fees24h, timeText)
+	
 	var b strings.Builder
 	// 重点字段用 *粗体* 高亮
 	b.WriteString(fmt.Sprintf("🌐 *代币名称*：*%s*\n\n", tokenPair))
@@ -372,7 +409,7 @@ func FormatPoolMessageWithHistory(pool model.Pool, oldEarnFee float64) string {
 }
 
 // FormatEarnFeeSurgeMessage 格式化交易额暴增流动性消息
-func FormatEarnFeeSurgeMessage(pools []model.Pool, history map[string]float64) string {
+func FormatEarnFeeSurgeMessage(pools []model.Pool, history map[string]EarnFeeHistory) string {
 	if len(pools) == 0 {
 		return ""
 	}
@@ -384,8 +421,14 @@ func FormatEarnFeeSurgeMessage(pools []model.Pool, history map[string]float64) s
 	}
 	for i, pool := range pools {
 		builder.WriteString(fmt.Sprintf("▸ *【%d】*\n\n", i+1))
-		oldEarnFee := history[pool.ID]
-		builder.WriteString(FormatPoolMessageWithHistory(pool, oldEarnFee))
+		historyItem := history[pool.ID]
+		oldEarnFee := historyItem.Value
+		oldTimestamp := historyItem.Timestamp
+		if oldTimestamp.IsZero() {
+			// 如果没有时间戳，使用当前时间（兼容旧数据）
+			oldTimestamp = time.Now()
+		}
+		builder.WriteString(FormatPoolMessageWithHistory(pool, oldEarnFee, oldTimestamp))
 		if i < len(pools)-1 {
 			builder.WriteString("\n\n━━━━━━━━━━━━━━━━━━━━\n\n")
 		}
@@ -614,39 +657,80 @@ func (s *kyberSwapImpl) ResetDailySentPools(ctx context.Context) error {
 	return nil
 }
 
-// GetPoolEarnFeeHistory 获取所有池子的 earnFee 历史值
+// GetPoolEarnFeeHistory 获取所有池子的 earnFee 历史值（兼容旧版本）
 func (s *kyberSwapImpl) GetPoolEarnFeeHistory(ctx context.Context) (map[string]float64, error) {
+	historyWithTime, err := s.GetPoolEarnFeeHistoryWithTime(ctx)
+	if err != nil {
+		return nil, err
+	}
+	
+	history := make(map[string]float64)
+	for id, h := range historyWithTime {
+		history[id] = h.Value
+	}
+	
+	return history, nil
+}
+
+// GetPoolEarnFeeHistoryWithTime 获取所有池子的 earnFee 历史值和时间戳
+func (s *kyberSwapImpl) GetPoolEarnFeeHistoryWithTime(ctx context.Context) (map[string]EarnFeeHistory, error) {
 	filePath := "data/pool_earn_fee_history.json"
 	
 	if !gfile.Exists(filePath) {
-		return make(map[string]float64), nil
+		return make(map[string]EarnFeeHistory), nil
 	}
 	
 	content := gfile.GetContents(filePath)
 	if content == "" || content == "{}" {
-		return make(map[string]float64), nil
+		return make(map[string]EarnFeeHistory), nil
 	}
 	
-	var history map[string]float64
-	if err := json.Unmarshal([]byte(content), &history); err != nil {
+	// 先尝试解析为新格式（带时间戳）
+	var historyWithTime map[string]EarnFeeHistory
+	if err := json.Unmarshal([]byte(content), &historyWithTime); err == nil {
+		// 检查是否是新格式（有 timestamp 字段）
+		if len(historyWithTime) > 0 {
+			for _, h := range historyWithTime {
+				if !h.Timestamp.IsZero() {
+					return historyWithTime, nil
+				}
+			}
+		}
+	}
+	
+	// 如果是旧格式（只有 float64），转换为新格式
+	var oldHistory map[string]float64
+	if err := json.Unmarshal([]byte(content), &oldHistory); err != nil {
 		return nil, err
 	}
 	
-	return history, nil
+	// 转换为新格式
+	historyWithTime = make(map[string]EarnFeeHistory)
+	for id, value := range oldHistory {
+		historyWithTime[id] = EarnFeeHistory{
+			Value:     value,
+			Timestamp: time.Now(), // 旧数据没有时间戳，使用当前时间
+		}
+	}
+	
+	return historyWithTime, nil
 }
 
 // UpdatePoolEarnFeeHistory 更新指定池子的 earnFee 历史值
 func (s *kyberSwapImpl) UpdatePoolEarnFeeHistory(ctx context.Context, poolID string, earnFee float64) error {
 	filePath := "data/pool_earn_fee_history.json"
 	
-	// 获取现有的历史值
-	history, err := s.GetPoolEarnFeeHistory(ctx)
+	// 获取现有的历史值（带时间戳）
+	history, err := s.GetPoolEarnFeeHistoryWithTime(ctx)
 	if err != nil {
 		return err
 	}
 	
-	// 更新指定池子的值
-	history[poolID] = earnFee
+	// 更新指定池子的值和时间戳
+	history[poolID] = EarnFeeHistory{
+		Value:     earnFee,
+		Timestamp: time.Now(),
+	}
 	
 	// 确保目录存在
 	dir := gfile.Dir(filePath)
