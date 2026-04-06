@@ -661,7 +661,9 @@ func (s *kyberSwapImpl) ResetDailySentPools(ctx context.Context) error {
 func (s *kyberSwapImpl) GetPoolEarnFeeHistory(ctx context.Context) (map[string]float64, error) {
 	historyWithTime, err := s.GetPoolEarnFeeHistoryWithTime(ctx)
 	if err != nil {
-		return nil, err
+		// 解析失败时回退为空，避免任务中断
+		g.Log().Warning(ctx, "解析 earnFee 历史（含时间戳）失败，将使用空记录继续:", err)
+		return make(map[string]float64), nil
 	}
 	
 	history := make(map[string]float64)
@@ -700,20 +702,21 @@ func (s *kyberSwapImpl) GetPoolEarnFeeHistoryWithTime(ctx context.Context) (map[
 	
 	// 如果是旧格式（只有 float64），转换为新格式
 	var oldHistory map[string]float64
-	if err := json.Unmarshal([]byte(content), &oldHistory); err != nil {
-		return nil, err
-	}
-	
-	// 转换为新格式
-	historyWithTime = make(map[string]EarnFeeHistory)
-	for id, value := range oldHistory {
-		historyWithTime[id] = EarnFeeHistory{
-			Value:     value,
-			Timestamp: time.Now(), // 旧数据没有时间戳，使用当前时间
+	if err := json.Unmarshal([]byte(content), &oldHistory); err == nil {
+		// 转换为新格式
+		historyWithTime = make(map[string]EarnFeeHistory)
+		for id, value := range oldHistory {
+			historyWithTime[id] = EarnFeeHistory{
+				Value:     value,
+				Timestamp: time.Now(), // 旧数据没有时间戳，使用当前时间
+			}
 		}
+		return historyWithTime, nil
 	}
 	
-	return historyWithTime, nil
+	// 兜底：格式异常，返回空记录（不报错，避免打断任务）
+	g.Log().Warning(ctx, "earnFee 历史文件格式异常，已回退为空记录")
+	return make(map[string]EarnFeeHistory), nil
 }
 
 // UpdatePoolEarnFeeHistory 更新指定池子的 earnFee 历史值
@@ -723,7 +726,9 @@ func (s *kyberSwapImpl) UpdatePoolEarnFeeHistory(ctx context.Context, poolID str
 	// 获取现有的历史值（带时间戳）
 	history, err := s.GetPoolEarnFeeHistoryWithTime(ctx)
 	if err != nil {
-		return err
+		// 解析失败时从空记录开始，避免写入失败
+		g.Log().Warning(ctx, "解析 earnFee 历史失败，使用空记录重新写入:", err)
+		history = make(map[string]EarnFeeHistory)
 	}
 	
 	// 更新指定池子的值和时间戳
