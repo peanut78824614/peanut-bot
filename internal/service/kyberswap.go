@@ -102,7 +102,7 @@ func (s *kyberSwapImpl) fetchPoolsByChains(ctx context.Context, chainIDs []int, 
 	return allPools, nil
 }
 
-// fetchPoolsFromURL 请求单个 URL 并解析池子（过滤含 WETH、且需包含 USDT/USDC）
+// fetchPoolsFromURL 请求单个 URL 并解析池子（过滤含 WETH，且需包含 USDT/USDC/USDG）
 func (s *kyberSwapImpl) fetchPoolsFromURL(ctx context.Context, url string) ([]model.Pool, error) {
 	client := &http.Client{
 		Timeout: 90 * time.Second, // 接口可能较慢，延长等待
@@ -142,77 +142,59 @@ func (s *kyberSwapImpl) fetchPoolsFromURL(ctx context.Context, url string) ([]mo
 	// 尝试多种可能的响应格式
 	pools := make([]model.Pool, 0)
 	parseFailedCount := 0
+	rawCount := 0
+
+	appendParsed := func(poolsData []interface{}) {
+		rawCount += len(poolsData)
+		for i, p := range poolsData {
+			if pool := s.parsePoolFromInterface(p); pool != nil {
+				pools = append(pools, *pool)
+			} else {
+				parseFailedCount++
+				if i < 3 {
+					g.Log().Debug(ctx, fmt.Sprintf("解析第 %d 个池子失败/被过滤", i+1))
+				}
+			}
+		}
+	}
 
 	// 格式1: { data: { pools: [...] } }
 	if data, ok := rawData["data"].(map[string]interface{}); ok {
 		if poolsData, ok := data["pools"].([]interface{}); ok {
 			g.Log().Info(ctx, fmt.Sprintf("格式1: 找到 %d 个池子数据", len(poolsData)))
-			for i, p := range poolsData {
-				if pool := s.parsePoolFromInterface(p); pool != nil {
-					pools = append(pools, *pool)
-				} else {
-					parseFailedCount++
-					if i < 3 { // 只记录前3个失败的，避免日志过多
-						g.Log().Debug(ctx, fmt.Sprintf("解析第 %d 个池子失败", i+1))
-					}
-				}
-			}
+			appendParsed(poolsData)
 		}
 		// 格式1变体: { data: [...] } 直接是数组
-		if len(pools) == 0 {
+		if len(pools) == 0 && rawCount == 0 {
 			if poolsData, ok := data[""].([]interface{}); ok {
 				g.Log().Info(ctx, fmt.Sprintf("格式1变体: 找到 %d 个池子数据", len(poolsData)))
-				for i, p := range poolsData {
-					if pool := s.parsePoolFromInterface(p); pool != nil {
-						pools = append(pools, *pool)
-					} else {
-						parseFailedCount++
-						if i < 3 {
-							g.Log().Debug(ctx, fmt.Sprintf("解析第 %d 个池子失败", i+1))
-						}
-					}
-				}
+				appendParsed(poolsData)
 			}
 		}
 	}
 
 	// 格式2: { pools: [...] }
-	if len(pools) == 0 {
+	if len(pools) == 0 && rawCount == 0 {
 		if poolsData, ok := rawData["pools"].([]interface{}); ok {
 			g.Log().Info(ctx, fmt.Sprintf("格式2: 找到 %d 个池子数据", len(poolsData)))
-			for i, p := range poolsData {
-				if pool := s.parsePoolFromInterface(p); pool != nil {
-					pools = append(pools, *pool)
-				} else {
-					parseFailedCount++
-					if i < 3 {
-						g.Log().Debug(ctx, fmt.Sprintf("解析第 %d 个池子失败", i+1))
-					}
-				}
-			}
+			appendParsed(poolsData)
 		}
 	}
 
 	// 格式3: 直接是数组 [...]
-	if len(pools) == 0 {
-		// 尝试直接解析为数组
+	if len(pools) == 0 && rawCount == 0 {
 		var poolsArray []interface{}
 		if err := json.Unmarshal(body, &poolsArray); err == nil && len(poolsArray) > 0 {
 			g.Log().Info(ctx, fmt.Sprintf("格式3: 找到 %d 个池子数据", len(poolsArray)))
-			for i, p := range poolsArray {
-				if pool := s.parsePoolFromInterface(p); pool != nil {
-					pools = append(pools, *pool)
-				} else {
-					parseFailedCount++
-					if i < 3 {
-						g.Log().Debug(ctx, fmt.Sprintf("解析第 %d 个池子失败", i+1))
-					}
-				}
-			}
+			appendParsed(poolsArray)
 		}
 	}
 
 	if len(pools) == 0 {
+		if rawCount > 0 {
+			g.Log().Warning(ctx, fmt.Sprintf("接口返回 %d 个池子，过滤后为 0（需含 USDT/USDC/USDG，且不含 WETH）", rawCount))
+			return []model.Pool{}, nil
+		}
 		g.Log().Warning(ctx, "未能解析出池子数据，响应格式可能不同")
 		bodyLen := len(body)
 		previewLen := 500
@@ -220,7 +202,6 @@ func (s *kyberSwapImpl) fetchPoolsFromURL(ctx context.Context, url string) ([]mo
 			previewLen = bodyLen
 		}
 		g.Log().Debug(ctx, "响应内容前500字符:", string(body[:previewLen]))
-		// 打印 rawData 的键，帮助调试
 		keys := make([]string, 0, len(rawData))
 		for k := range rawData {
 			keys = append(keys, k)
@@ -230,7 +211,7 @@ func (s *kyberSwapImpl) fetchPoolsFromURL(ctx context.Context, url string) ([]mo
 	}
 
 	if parseFailedCount > 0 {
-		g.Log().Warning(ctx, fmt.Sprintf("成功解析 %d 个池子，失败 %d 个", len(pools), parseFailedCount))
+		g.Log().Warning(ctx, fmt.Sprintf("成功解析 %d 个池子，过滤/跳过 %d 个", len(pools), parseFailedCount))
 	} else {
 		g.Log().Info(ctx, fmt.Sprintf("成功解析 %d 个池子", len(pools)))
 	}
@@ -523,7 +504,17 @@ func hasWETH(tokens []interface{}) bool {
 	return false
 }
 
-// hasUSDTOrUSDC 判断 tokens 中是否包含 USDT 或 USDC（至少一个即可）
+// isStableSymbol 判断是否为报价稳定币。Robinhood(4663) 使用 USDG，不是 USDT/USDC。
+func isStableSymbol(sym string) bool {
+	switch strings.ToLower(strings.TrimSpace(sym)) {
+	case "usdt", "usdc", "usdg":
+		return true
+	default:
+		return false
+	}
+}
+
+// hasUSDTOrUSDC 判断 tokens 中是否包含 USDT / USDC / USDG（至少一个即可）
 func hasUSDTOrUSDC(tokens []interface{}) bool {
 	for _, t := range tokens {
 		m, ok := t.(map[string]interface{})
@@ -531,8 +522,7 @@ func hasUSDTOrUSDC(tokens []interface{}) bool {
 			continue
 		}
 		sym, _ := m["symbol"].(string)
-		lower := strings.ToLower(sym)
-		if lower == "usdt" || lower == "usdc" {
+		if isStableSymbol(sym) {
 			return true
 		}
 	}
@@ -541,7 +531,7 @@ func hasUSDTOrUSDC(tokens []interface{}) bool {
 
 // parsePoolFromInterface 从 interface{} 解析池子数据（仅保留 tokens 中 symbol 不包含 WETH 的池子）
 // 字段映射：tvl->TVL, earnFee->Fees24h, feeTier->费率%, liquidity->总流动性, exchange->协议, apr->APR
-// 合约地址取 tokens 中 symbol 不为 USDT/USDC 的 address；代币名称取 tokens 的 symbol
+// 合约地址取 tokens 中 symbol 不为 USDT/USDC/USDG 的 address；代币名称取 tokens 的 symbol
 func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 	poolMap, ok := data.(map[string]interface{})
 	if !ok {
@@ -556,7 +546,7 @@ func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 		return nil // 过滤：排除含 WETH 的池子
 	}
 	if !hasUSDTOrUSDC(tokens) {
-		return nil // 过滤：只推送 tokens 中包含 USDT 或 USDC（至少一个）的池子
+		return nil // 过滤：只推送包含 USDT / USDC / USDG 的池子
 	}
 
 	pool := &model.Pool{}
@@ -607,7 +597,7 @@ func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 		pool.ChainID = int(chainId)
 	}
 
-	// tokens: 代币名称用 symbol，合约地址取 symbol 不为 USDT/USDC 的 address
+	// tokens: 代币名称用 symbol，合约地址取非稳定币 address
 	var syms []string
 	for i, t := range tokens {
 		m, ok := t.(map[string]interface{})
@@ -617,8 +607,7 @@ func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 		addr, _ := m["address"].(string)
 		sym, _ := m["symbol"].(string)
 		syms = append(syms, sym)
-		symLower := strings.ToLower(sym)
-		if symLower != "usdt" && symLower != "usdc" {
+		if !isStableSymbol(sym) {
 			pool.ContractAddress = addr
 		}
 		if i == 0 {
