@@ -47,11 +47,13 @@ func KyberSwap() IKyberSwap {
 // 数据来源：Robinhood(4663)、Base(8453)、BSC(56) 各拉 page=1、limit=100
 const earnServicePoolsURL = "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=%d&page=%d&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q="
 
-var earnServiceChainIDs = []int{4663, 8453, 56}
+const robinhoodChainID = 4663
+
+var earnServiceChainIDs = []int{robinhoodChainID, 8453, 56}
 
 func earnServiceChainLabel(chainID int) string {
 	switch chainID {
-	case 4663:
+	case robinhoodChainID:
 		return "Robinhood"
 	case 8453:
 		return "Base"
@@ -192,7 +194,7 @@ func (s *kyberSwapImpl) fetchPoolsFromURL(ctx context.Context, url string) ([]mo
 
 	if len(pools) == 0 {
 		if rawCount > 0 {
-			g.Log().Warning(ctx, fmt.Sprintf("接口返回 %d 个池子，过滤后为 0（需含 USDT/USDC/USDG，且不含 WETH）", rawCount))
+			g.Log().Warning(ctx, fmt.Sprintf("接口返回 %d 个池子，过滤后为 0（Base/BSC 需含 USDT/USDC/USDG 且不含 WETH；Robinhood 全部保留）", rawCount))
 			return []model.Pool{}, nil
 		}
 		g.Log().Warning(ctx, "未能解析出池子数据，响应格式可能不同")
@@ -529,9 +531,20 @@ func hasUSDTOrUSDC(tokens []interface{}) bool {
 	return false
 }
 
-// parsePoolFromInterface 从 interface{} 解析池子数据（仅保留 tokens 中 symbol 不包含 WETH 的池子）
-// 字段映射：tvl->TVL, earnFee->Fees24h, feeTier->费率%, liquidity->总流动性, exchange->协议, apr->APR
-// 合约地址取 tokens 中 symbol 不为 USDT/USDC/USDG 的 address；代币名称取 tokens 的 symbol
+func poolChainIDFromMap(poolMap map[string]interface{}) int {
+	if chain, ok := poolMap["chain"].(map[string]interface{}); ok {
+		if id, ok := chain["id"].(float64); ok {
+			return int(id)
+		}
+	}
+	if chainId, ok := poolMap["chainId"].(float64); ok {
+		return int(chainId)
+	}
+	return 0
+}
+
+// parsePoolFromInterface 解析池子。Base/BSC 仍过滤 WETH、且需含 USDT/USDC/USDG；
+// Robinhood(4663) 不过滤，接口返回的全部推送。
 func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 	poolMap, ok := data.(map[string]interface{})
 	if !ok {
@@ -539,14 +552,18 @@ func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 	}
 
 	tokens, _ := poolMap["tokens"].([]interface{})
-	if len(tokens) < 2 {
-		return nil
-	}
-	if hasWETH(tokens) {
-		return nil // 过滤：排除含 WETH 的池子
-	}
-	if !hasUSDTOrUSDC(tokens) {
-		return nil // 过滤：只推送包含 USDT / USDC / USDG 的池子
+	chainID := poolChainIDFromMap(poolMap)
+	keepAll := chainID == robinhoodChainID
+	if !keepAll {
+		if len(tokens) < 2 {
+			return nil
+		}
+		if hasWETH(tokens) {
+			return nil
+		}
+		if !hasUSDTOrUSDC(tokens) {
+			return nil
+		}
 	}
 
 	pool := &model.Pool{}
@@ -595,6 +612,9 @@ func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 		}
 	} else if chainId, ok := poolMap["chainId"].(float64); ok {
 		pool.ChainID = int(chainId)
+	}
+	if pool.ChainID == 0 && chainID != 0 {
+		pool.ChainID = chainID
 	}
 
 	// tokens: 代币名称用 symbol，合约地址取非稳定币 address
