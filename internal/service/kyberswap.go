@@ -1,16 +1,18 @@
 package service
+
 import (
 	"context"
 	"data/internal/model"
 	"encoding/json"
 	"fmt"
+	"github.com/gogf/gf/v2/frame/g"
+	"github.com/gogf/gf/v2/os/gfile"
 	"io"
 	"net/http"
 	"strings"
 	"time"
-	"github.com/gogf/gf/v2/frame/g"
-	"github.com/gogf/gf/v2/os/gfile"
 )
+
 type IKyberSwap interface {
 	FetchPools(ctx context.Context, page int) ([]model.Pool, error)
 	FetchAllPools(ctx context.Context) ([]model.Pool, error)
@@ -25,6 +27,7 @@ type IKyberSwap interface {
 	UpdatePoolEarnFeeHistory(ctx context.Context, poolID string, earnFee float64) error
 	UpdatePoolEarnFeeHistories(ctx context.Context, updates map[string]float64) error
 }
+
 // EarnFeeHistory 存储 earnFee 历史值和时间戳
 type EarnFeeHistory struct {
 	Value     float64   `json:"value"`
@@ -32,46 +35,102 @@ type EarnFeeHistory struct {
 }
 
 type kyberSwapImpl struct{}
+
 var kyberSwapService = kyberSwapImpl{}
+
 // KyberSwap 获取 KyberSwap 服务实例
 func KyberSwap() IKyberSwap {
 	return &kyberSwapService
 }
-// earnServicePoolsURL Kyber Earn 池子列表 API
-// 数据来源：Robinhood(4663) + Base(8453) + BSC(56)
-// 说明：官网 explorer 使用 limit=200，但该接口对 limit>100 会返回 500，且 high_apr 当前 totalItems=100，故使用 limit=100 拉全量
-const earnServicePoolsURL = "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=4663%%2C8453%%2C56&page=%d&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q="
 
-// FetchPools 获取指定页面的池子数据（仅保留 tokens 中 symbol 不包含 WETH 的池子）
+// earnServicePoolsURL Kyber Earn 池子列表 API，每次只请求一条链
+// 数据来源：Robinhood(4663)、Base(8453)、BSC(56) 各拉 page=1、limit=100
+const earnServicePoolsURL = "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=%d&page=%d&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q="
+
+var earnServiceChainIDs = []int{4663, 8453, 56}
+
+func earnServiceChainLabel(chainID int) string {
+	switch chainID {
+	case 4663:
+		return "Robinhood"
+	case 8453:
+		return "Base"
+	case 56:
+		return "BSC"
+	default:
+		return fmt.Sprintf("chain-%d", chainID)
+	}
+}
+
+// FetchPools 获取指定页面的池子数据：三条链各请求一次后合并
 func (s *kyberSwapImpl) FetchPools(ctx context.Context, page int) ([]model.Pool, error) {
-	url := fmt.Sprintf(earnServicePoolsURL, page)
+	return s.fetchPoolsByChains(ctx, earnServiceChainIDs, page)
+}
+
+func (s *kyberSwapImpl) fetchPoolsByChains(ctx context.Context, chainIDs []int, page int) ([]model.Pool, error) {
+	allPools := make([]model.Pool, 0)
+	seen := make(map[string]bool)
+	var lastErr error
+	success := 0
+
+	for _, chainID := range chainIDs {
+		url := fmt.Sprintf(earnServicePoolsURL, chainID, page)
+		g.Log().Info(ctx, fmt.Sprintf("正在获取 %s(%d) page=%d 的池子数据...", earnServiceChainLabel(chainID), chainID, page))
+		pools, err := s.fetchPoolsFromURL(ctx, url)
+		if err != nil {
+			lastErr = err
+			g.Log().Error(ctx, fmt.Sprintf("获取 %s(%d) 池子数据失败: %v", earnServiceChainLabel(chainID), chainID, err))
+			continue
+		}
+		success++
+		for _, pool := range pools {
+			if pool.ID == "" || seen[pool.ID] {
+				continue
+			}
+			seen[pool.ID] = true
+			allPools = append(allPools, pool)
+		}
+		g.Log().Info(ctx, fmt.Sprintf("%s(%d) 解析到 %d 个池子，累计 %d 个", earnServiceChainLabel(chainID), chainID, len(pools), len(allPools)))
+	}
+
+	if success == 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return []model.Pool{}, nil
+	}
+	return allPools, nil
+}
+
+// fetchPoolsFromURL 请求单个 URL 并解析池子（过滤含 WETH、且需包含 USDT/USDC）
+func (s *kyberSwapImpl) fetchPoolsFromURL(ctx context.Context, url string) ([]model.Pool, error) {
 	client := &http.Client{
 		Timeout: 90 * time.Second, // 接口可能较慢，延长等待
 	}
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	req.Header.Set("Accept", "application/json")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP error: %d", resp.StatusCode)
 	}
-	
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// 先尝试解析为通用结构，查看实际响应格式
 	var rawData map[string]interface{}
 	if err := json.Unmarshal(body, &rawData); err != nil {
@@ -79,11 +138,11 @@ func (s *kyberSwapImpl) FetchPools(ctx context.Context, page int) ([]model.Pool,
 		g.Log().Debug(ctx, "响应内容:", string(body))
 		return nil, err
 	}
-	
+
 	// 尝试多种可能的响应格式
 	pools := make([]model.Pool, 0)
 	parseFailedCount := 0
-	
+
 	// 格式1: { data: { pools: [...] } }
 	if data, ok := rawData["data"].(map[string]interface{}); ok {
 		if poolsData, ok := data["pools"].([]interface{}); ok {
@@ -116,7 +175,7 @@ func (s *kyberSwapImpl) FetchPools(ctx context.Context, page int) ([]model.Pool,
 			}
 		}
 	}
-	
+
 	// 格式2: { pools: [...] }
 	if len(pools) == 0 {
 		if poolsData, ok := rawData["pools"].([]interface{}); ok {
@@ -133,7 +192,7 @@ func (s *kyberSwapImpl) FetchPools(ctx context.Context, page int) ([]model.Pool,
 			}
 		}
 	}
-	
+
 	// 格式3: 直接是数组 [...]
 	if len(pools) == 0 {
 		// 尝试直接解析为数组
@@ -152,7 +211,7 @@ func (s *kyberSwapImpl) FetchPools(ctx context.Context, page int) ([]model.Pool,
 			}
 		}
 	}
-	
+
 	if len(pools) == 0 {
 		g.Log().Warning(ctx, "未能解析出池子数据，响应格式可能不同")
 		bodyLen := len(body)
@@ -169,40 +228,43 @@ func (s *kyberSwapImpl) FetchPools(ctx context.Context, page int) ([]model.Pool,
 		g.Log().Debug(ctx, "响应数据键:", keys)
 		return []model.Pool{}, nil
 	}
-	
+
 	if parseFailedCount > 0 {
 		g.Log().Warning(ctx, fmt.Sprintf("成功解析 %d 个池子，失败 %d 个", len(pools), parseFailedCount))
 	} else {
 		g.Log().Info(ctx, fmt.Sprintf("成功解析 %d 个池子", len(pools)))
 	}
-	
+
 	return pools, nil
 }
-// FetchAllPools 获取池子数据（仅拉取 page=1）
+
+// FetchAllPools 按链分别拉取 page=1、limit=100，再合并去重
 func (s *kyberSwapImpl) FetchAllPools(ctx context.Context) ([]model.Pool, error) {
 	return s.FetchPools(ctx, 1)
 }
+
 // GetStoredPools 获取存储的池子数据
 func (s *kyberSwapImpl) GetStoredPools(ctx context.Context) ([]model.Pool, error) {
 	filePath := "data/kyberswap_pools.json"
-	
+
 	if !gfile.Exists(filePath) {
 		return []model.Pool{}, nil
 	}
-	
+
 	content := gfile.GetContents(filePath)
-	
+
 	var pools []model.Pool
 	if err := json.Unmarshal([]byte(content), &pools); err != nil {
 		return nil, err
 	}
-	
+
 	return pools, nil
 }
+
 // SavePools 保存池子数据
 func (s *kyberSwapImpl) SavePools(ctx context.Context, pools []model.Pool) error {
 	filePath := "data/kyberswap_pools.json"
-	
+
 	// 确保目录存在
 	dir := gfile.Dir(filePath)
 	if !gfile.Exists(dir) {
@@ -210,30 +272,32 @@ func (s *kyberSwapImpl) SavePools(ctx context.Context, pools []model.Pool) error
 			return err
 		}
 	}
-	
+
 	data, err := json.MarshalIndent(pools, "", "  ")
 	if err != nil {
 		return err
 	}
-	
+
 	return gfile.PutContents(filePath, string(data))
 }
+
 // ComparePools 比较新旧池子数据，返回新增的池子
 func (s *kyberSwapImpl) ComparePools(oldPools, newPools []model.Pool) []model.Pool {
 	oldMap := make(map[string]bool)
 	for _, pool := range oldPools {
 		oldMap[pool.ID] = true
 	}
-	
+
 	newPoolsList := make([]model.Pool, 0)
 	for _, pool := range newPools {
 		if !oldMap[pool.ID] {
 			newPoolsList = append(newPoolsList, pool)
 		}
 	}
-	
+
 	return newPoolsList
 }
+
 // formatAPR 格式化 APR
 func formatAPR(apr float64) string {
 	if apr >= 1000 {
@@ -244,6 +308,7 @@ func formatAPR(apr float64) string {
 		return fmt.Sprintf("%.2f%%", apr)
 	}
 }
+
 // formatTVL 格式化 TVL
 func formatTVL(tvl float64) string {
 	if tvl >= 1000000 {
@@ -254,6 +319,7 @@ func formatTVL(tvl float64) string {
 		return fmt.Sprintf("$%.2f", tvl)
 	}
 }
+
 // exchangeToShort 将 API 的 exchange 转为短名（如 univ4）
 func exchangeToShort(exchange string) string {
 	ex := strings.ToLower(exchange)
@@ -328,6 +394,7 @@ func FormatPoolMessage(pool model.Pool) string {
 	}
 	return b.String()
 }
+
 // FormatPoolsMessage 格式化多个池子消息（带序号与分隔）
 // 发现 1 个新池子时采用 PUMP 金狗提醒格式标题
 func FormatPoolsMessage(pools []model.Pool, isFirstRun bool) string {
@@ -335,13 +402,13 @@ func FormatPoolsMessage(pools []model.Pool, isFirstRun bool) string {
 		return ""
 	}
 	var builder strings.Builder
-		// 用全角空格使标题视觉居中（Telegram 无原生居中）
-		builder.WriteString("　　　　🔴🔴  高收益流动性提醒 🔴🔴\n\n")
-		if isFirstRun && len(pools) != 1 {
-			builder.WriteString(fmt.Sprintf("🎉 *首次运行 | %d 个池子*\n\n", len(pools)))
-		} else if !isFirstRun && len(pools) != 1 {
-			builder.WriteString(fmt.Sprintf("✨ *发现 %d 个新池子*\n\n", len(pools)))
-		}
+	// 用全角空格使标题视觉居中（Telegram 无原生居中）
+	builder.WriteString("　　　　🔴🔴  高收益流动性提醒 🔴🔴\n\n")
+	if isFirstRun && len(pools) != 1 {
+		builder.WriteString(fmt.Sprintf("🎉 *首次运行 | %d 个池子*\n\n", len(pools)))
+	} else if !isFirstRun && len(pools) != 1 {
+		builder.WriteString(fmt.Sprintf("✨ *发现 %d 个新池子*\n\n", len(pools)))
+	}
 	for i, pool := range pools {
 		builder.WriteString(fmt.Sprintf("▸ *【%d】*\n\n", i+1))
 		builder.WriteString(FormatPoolMessage(pool))
@@ -358,7 +425,7 @@ func formatDuration(d time.Duration) string {
 	seconds := int(d.Seconds())
 	minutes := int(d.Minutes())
 	hours := int(d.Hours())
-	
+
 	// 不足1分钟，显示秒数
 	if minutes < 1 {
 		if seconds < 1 {
@@ -366,12 +433,12 @@ func formatDuration(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d秒内", seconds)
 	}
-	
+
 	// 不足1小时，显示分钟数
 	if hours < 1 {
 		return fmt.Sprintf("%d分钟内", minutes)
 	}
-	
+
 	// 超过1小时，显示小时数
 	return fmt.Sprintf("%d小时内", hours)
 }
@@ -389,14 +456,14 @@ func FormatPoolMessageWithHistory(pool model.Pool, oldEarnFee float64, oldTimest
 	feeText := fmt.Sprintf("%.2f%%", pool.FeeTier)
 	chainDisplay := chainNameDisplay(pool.ChainName)
 	volText := fmt.Sprintf("$%.2f", pool.Volume24h)
-	
+
 	// 计算时间间隔
 	timeDiff := time.Since(oldTimestamp)
 	timeText := formatDuration(timeDiff)
-	
+
 	// 显示原值和现值，以及时间间隔，例如 $100.00 -> $200.00 (5分钟内)
 	feesText := fmt.Sprintf("$%.2f -> $%.2f (%s)", oldEarnFee, pool.Fees24h, timeText)
-	
+
 	var b strings.Builder
 	// 重点字段用 *粗体* 高亮
 	b.WriteString(fmt.Sprintf("🌐 *代币名称*：*%s*\n\n", tokenPair))
@@ -440,6 +507,7 @@ func FormatEarnFeeSurgeMessage(pools []model.Pool, history map[string]EarnFeeHis
 	}
 	return builder.String()
 }
+
 // hasWETH 判断 tokens 数组中是否包含 symbol 为 WETH 的代币
 func hasWETH(tokens []interface{}) bool {
 	for _, t := range tokens {
@@ -570,58 +638,60 @@ func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 	}
 	return pool
 }
+
 // GetTodaySentPoolIDs 获取今天已推送的池子ID列表
 func (s *kyberSwapImpl) GetTodaySentPoolIDs(ctx context.Context) (map[string]bool, error) {
 	today := time.Now().Format("2006-01-02")
 	filePath := fmt.Sprintf("data/sent_pools_%s.json", today)
-	
+
 	if !gfile.Exists(filePath) {
 		return make(map[string]bool), nil
 	}
-	
+
 	content := gfile.GetContents(filePath)
 	if content == "" || content == "[]" {
 		return make(map[string]bool), nil
 	}
-	
+
 	var poolIDs []string
 	if err := json.Unmarshal([]byte(content), &poolIDs); err != nil {
 		return nil, err
 	}
-	
+
 	poolIDMap := make(map[string]bool)
 	for _, id := range poolIDs {
 		poolIDMap[id] = true
 	}
-	
+
 	return poolIDMap, nil
 }
+
 // AddSentPoolIDs 添加已推送的池子ID到今天的记录中
 func (s *kyberSwapImpl) AddSentPoolIDs(ctx context.Context, poolIDs []string) error {
 	if len(poolIDs) == 0 {
 		return nil
 	}
-	
+
 	today := time.Now().Format("2006-01-02")
 	filePath := fmt.Sprintf("data/sent_pools_%s.json", today)
-	
+
 	// 获取今天已有的池子ID
 	existingMap, err := s.GetTodaySentPoolIDs(ctx)
 	if err != nil {
 		return err
 	}
-	
+
 	// 添加新的池子ID（去重）
 	for _, id := range poolIDs {
 		existingMap[id] = true
 	}
-	
+
 	// 转换为数组
 	allIDs := make([]string, 0, len(existingMap))
 	for id := range existingMap {
 		allIDs = append(allIDs, id)
 	}
-	
+
 	// 确保目录存在
 	dir := gfile.Dir(filePath)
 	if !gfile.Exists(dir) {
@@ -629,21 +699,22 @@ func (s *kyberSwapImpl) AddSentPoolIDs(ctx context.Context, poolIDs []string) er
 			return err
 		}
 	}
-	
+
 	// 保存到文件
 	data, err := json.MarshalIndent(allIDs, "", "  ")
 	if err != nil {
 		return err
 	}
-	
+
 	return gfile.PutContents(filePath, string(data))
 }
+
 // ResetDailySentPools 重置每天的已推送记录（在每天0点执行）
 func (s *kyberSwapImpl) ResetDailySentPools(ctx context.Context) error {
 	// 获取今天的日期，清空今天的已推送记录
 	today := time.Now().Format("2006-01-02")
 	filePath := fmt.Sprintf("data/sent_pools_%s.json", today)
-	
+
 	// 确保目录存在
 	dir := gfile.Dir(filePath)
 	if !gfile.Exists(dir) {
@@ -651,13 +722,13 @@ func (s *kyberSwapImpl) ResetDailySentPools(ctx context.Context) error {
 			return err
 		}
 	}
-	
+
 	// 重置文件为空数组
 	emptyData := "[]"
 	if err := gfile.PutContents(filePath, emptyData); err != nil {
 		return err
 	}
-	
+
 	g.Log().Info(ctx, fmt.Sprintf("重置今天的已推送记录: %s", filePath))
 	return nil
 }

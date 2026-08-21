@@ -21,7 +21,7 @@ func main() {
 	}
 
 	kyber := service.KyberSwap()
-	fmt.Println("正在拉取 Kyber 池子数据 (page=1, 仅含 WETH)...")
+	fmt.Println("正在按链分别拉取 Kyber 池子数据 (Robinhood/Base/BSC, 各 page=1 limit=100)...")
 	pools, err := kyber.FetchAllPools(ctx)
 	if err != nil {
 		g.Log().Error(ctx, "拉取失败:", err)
@@ -29,7 +29,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("获取到 %d 个池子（已过滤仅含 WETH）\n\n", len(pools))
+	fmt.Printf("获取到 %d 个池子（已过滤）\n\n", len(pools))
 	if len(pools) > 0 {
 		fmt.Println("--- 第 1 条预览 ---")
 		fmt.Println(service.FormatPoolMessage(pools[0]))

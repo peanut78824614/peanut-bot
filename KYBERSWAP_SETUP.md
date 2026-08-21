@@ -87,7 +87,7 @@ go run main.go
 
 ## 功能特性
 
-- ✅ 每30秒自动监控（page=1，每页 100 条，覆盖 Robinhood / Base / BSC）
+- ✅ 每30秒自动监控（Robinhood / Base / BSC 各请求一次，每条链 page=1、limit=100）
 - ✅ 自动检测新池子
 - ✅ 美观的 Telegram 消息格式（支持 Markdown）
 - ✅ 自动保存历史数据
@@ -196,15 +196,19 @@ go run main.go
 
 ## API 端点说明
 
-代码中使用以下 API 端点：
-- `https://earn-service.kyberswap.com/api/v1/explorer/pools`
+代码中使用以下 API 端点，三条链分开请求：
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=4663&page=1&limit=100&interval=24h&tag=high_apr` (Robinhood)
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=8453&page=1&limit=100&interval=24h&tag=high_apr` (Base)
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=56&page=1&limit=100&interval=24h&tag=high_apr` (BSC)
 
 API 参数：
-- `chainIds=4663%2C8453%2C56` (Robinhood、Base 和 BSC 链)
+- `chainIds` 每次只传一个：`4663` / `8453` / `56`
 - `page=1` (页码)
-- `limit=100` (每页数量；官网 explorer 使用 200，但接口对 limit>100 会返回 500，且当前 high_apr 总量为 100)
+- `limit=100` (每条链每页数量；官网 explorer 使用 200，但接口对 limit>100 会返回 500)
 - `interval=24h`
 - `tag=high_apr` (高 APR 标签)
+
+三条链的结果会合并去重后再进入监控逻辑。
 
 如果该端点不可用或格式不同，代码会自动尝试从 HTML 页面解析数据。
 
@@ -238,5 +242,5 @@ telegram:
 
 可以在 `config/config.yaml` 中调整：
 - 监控间隔（修改任务调度）
-- 监控的链（修改 API 请求参数 `chainIds`）
+- 监控的链（修改 `earnServiceChainIDs`，每条链单独请求一次）
 - 每页数量（修改 API 请求参数 `limit`）
