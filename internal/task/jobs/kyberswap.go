@@ -6,6 +6,7 @@ import (
 	"data/internal/service"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gogf/gf/v2/frame/g"
@@ -14,32 +15,32 @@ import (
 // KyberSwapMonitorJob KyberSwap 监控任务
 func KyberSwapMonitorJob(ctx context.Context) {
 	g.Log().Info(ctx, "开始执行 KyberSwap 监控任务...")
-	
+
 	kyberSwap := service.KyberSwap()
 	telegram := service.Telegram()
-	
+
 	// 获取今天已推送的池子ID列表
 	sentPoolIDs, err := kyberSwap.GetTodaySentPoolIDs(ctx)
 	if err != nil {
 		g.Log().Error(ctx, "获取今天已推送池子列表失败:", err)
 		sentPoolIDs = make(map[string]bool) // 使用空map继续执行
 	}
-	
+
 	g.Log().Info(ctx, fmt.Sprintf("今天已推送 %d 个池子", len(sentPoolIDs)))
-	
+
 	// 获取新数据
 	newPools, err := kyberSwap.FetchAllPools(ctx)
 	if err != nil {
 		g.Log().Error(ctx, "获取 KyberSwap 数据失败:", err)
 		return
 	}
-	
+
 	g.Log().Info(ctx, fmt.Sprintf("获取到 %d 个池子数据", len(newPools)))
-	
+
 	// 找出今天未推送的池子（新增的池子）
 	poolsToNotify := make([]model.Pool, 0)
 	poolIDsToAdd := make([]string, 0)
-	
+
 	for _, pool := range newPools {
 		// 如果这个池子今天还没有推送过，则加入推送列表
 		if !sentPoolIDs[pool.ID] {
@@ -47,10 +48,10 @@ func KyberSwapMonitorJob(ctx context.Context) {
 			poolIDsToAdd = append(poolIDsToAdd, pool.ID)
 		}
 	}
-	
+
 	if len(poolsToNotify) > 0 {
 		g.Log().Info(ctx, fmt.Sprintf("发现 %d 个新池子（今天首次出现），准备发送通知", len(poolsToNotify)))
-		
+
 		// 发送到 Telegram
 		telegramChatId := g.Cfg().MustGet(ctx, "telegram.chatId", "").String()
 		if telegramChatId != "" {
@@ -83,7 +84,7 @@ func KyberSwapMonitorJob(ctx context.Context) {
 					g.Log().Info(ctx, "Telegram 消息发送成功")
 				}
 			}
-			
+
 			// 记录已推送的池子ID到今天的记录中
 			if err := kyberSwap.AddSentPoolIDs(ctx, poolIDsToAdd); err != nil {
 				g.Log().Error(ctx, "保存已推送池子ID失败:", err)
@@ -96,14 +97,14 @@ func KyberSwapMonitorJob(ctx context.Context) {
 	} else {
 		g.Log().Info(ctx, "今天所有池子都已推送过，没有新池子")
 	}
-	
+
 	// 保存最新的池子数据（用于其他用途，不用于推送判断）
 	if err := kyberSwap.SavePools(ctx, newPools); err != nil {
 		g.Log().Error(ctx, "保存池子数据失败:", err)
 	} else {
 		g.Log().Info(ctx, "池子数据保存成功")
 	}
-	
+
 	g.Log().Info(ctx, "KyberSwap 监控任务执行完成")
 }
 
@@ -112,11 +113,11 @@ func splitMessage(text string, maxLength int) []string {
 	if len(text) <= maxLength {
 		return []string{text}
 	}
-	
+
 	var messages []string
 	lines := strings.Split(text, "\n")
 	currentMessage := ""
-	
+
 	for _, line := range lines {
 		if len(currentMessage)+len(line)+1 > maxLength {
 			if currentMessage != "" {
@@ -134,20 +135,20 @@ func splitMessage(text string, maxLength int) []string {
 			currentMessage += line + "\n"
 		}
 	}
-	
+
 	if currentMessage != "" {
 		messages = append(messages, currentMessage)
 	}
-	
+
 	return messages
 }
 
 // ResetDailySentPoolsJob 每天0点重置已推送池子记录
 func ResetDailySentPoolsJob(ctx context.Context) {
 	g.Log().Info(ctx, "开始执行每日重置已推送池子记录任务...")
-	
+
 	kyberSwap := service.KyberSwap()
-	
+
 	if err := kyberSwap.ResetDailySentPools(ctx); err != nil {
 		g.Log().Error(ctx, "重置每日已推送池子记录失败:", err)
 	} else {
@@ -155,79 +156,84 @@ func ResetDailySentPoolsJob(ctx context.Context) {
 	}
 }
 
+var earnFeeMonitorMu sync.Mutex
+
 // KyberSwapEarnFeeMonitorJob 监控 earnFee 变化的任务
 func KyberSwapEarnFeeMonitorJob(ctx context.Context) {
+	if !earnFeeMonitorMu.TryLock() {
+		g.Log().Warning(ctx, "上一轮 EarnFee 监控仍在执行，跳过本轮")
+		return
+	}
+	defer earnFeeMonitorMu.Unlock()
+
 	g.Log().Info(ctx, "开始执行 KyberSwap EarnFee 监控任务...")
-	
+
 	kyberSwap := service.KyberSwap()
 	telegram := service.Telegram()
-	
+
 	// 获取当前的池子数据
 	newPools, err := kyberSwap.FetchAllPools(ctx)
 	if err != nil {
 		g.Log().Error(ctx, "获取 KyberSwap 数据失败:", err)
 		return
 	}
-	
+
 	g.Log().Info(ctx, fmt.Sprintf("获取到 %d 个池子数据", len(newPools)))
-	
-	// 获取历史 earnFee 值（带时间戳）
+
+	// 获取历史 earnFee 值（带时间戳）。解析失败时服务层会返回空记录 + nil error，
+	// 这里仍做兜底，避免再出现「获取历史值失败后整轮任务退出」。
 	history, err := kyberSwap.GetPoolEarnFeeHistoryWithTime(ctx)
 	if err != nil {
-		g.Log().Error(ctx, "获取 earnFee 历史值失败:", err)
-		return
+		g.Log().Warning(ctx, "获取 earnFee 历史值失败，将按空记录继续:", err)
+		history = make(map[string]service.EarnFeeHistory)
 	}
-	
+	if history == nil {
+		history = make(map[string]service.EarnFeeHistory)
+	}
+
 	// 找出 earnFee 有明显增加的池子
 	poolsToNotify := make([]model.Pool, 0)
 	// 保存需要推送的池子的历史值（带时间戳），用于显示原值和现值
 	poolsHistory := make(map[string]service.EarnFeeHistory)
-	
+	updates := make(map[string]float64, len(newPools))
+
 	for _, pool := range newPools {
 		historyItem, exists := history[pool.ID]
 		oldEarnFee := historyItem.Value
-		
+		updates[pool.ID] = pool.Fees24h
+
 		// 如果历史值不存在，记录当前值但不推送
 		if !exists {
-			// 更新历史值
-			if err := kyberSwap.UpdatePoolEarnFeeHistory(ctx, pool.ID, pool.Fees24h); err != nil {
-				g.Log().Error(ctx, fmt.Sprintf("更新池子 %s 的 earnFee 历史值失败: %v", pool.ID, err))
-			}
 			continue
 		}
-		
+
 		// 判断是否有明显增加（例如从100增加到105，即增加5%）
 		// 如果旧值为0，跳过
 		if oldEarnFee <= 0 {
-			// 更新历史值
-			if err := kyberSwap.UpdatePoolEarnFeeHistory(ctx, pool.ID, pool.Fees24h); err != nil {
-				g.Log().Error(ctx, fmt.Sprintf("更新池子 %s 的 earnFee 历史值失败: %v", pool.ID, err))
-			}
 			continue
 		}
-		
+
 		// 计算增长比例
 		increaseRatio := (pool.Fees24h - oldEarnFee) / oldEarnFee
-		
+
 		// 如果增长超过5%（0.05）且24h手续费大于20，则推送
 		if increaseRatio >= 0.05 && pool.Fees24h > 20 {
-			g.Log().Info(ctx, fmt.Sprintf("池子 %s earnFee 从 %.2f 增加到 %.2f，增长 %.2f%%", 
+			g.Log().Info(ctx, fmt.Sprintf("池子 %s earnFee 从 %.2f 增加到 %.2f，增长 %.2f%%",
 				pool.ID, oldEarnFee, pool.Fees24h, increaseRatio*100))
 			poolsToNotify = append(poolsToNotify, pool)
 			// 保存历史值（带时间戳），用于显示
 			poolsHistory[pool.ID] = historyItem
 		}
-		
-		// 更新历史值
-		if err := kyberSwap.UpdatePoolEarnFeeHistory(ctx, pool.ID, pool.Fees24h); err != nil {
-			g.Log().Error(ctx, fmt.Sprintf("更新池子 %s 的 earnFee 历史值失败: %v", pool.ID, err))
-		}
 	}
-	
+
+	if err := kyberSwap.UpdatePoolEarnFeeHistories(ctx, updates); err != nil {
+		g.Log().Error(ctx, "批量更新 earnFee 历史值失败:", err)
+	}
+
 	// 如果有需要推送的池子，发送通知
 	if len(poolsToNotify) > 0 {
 		g.Log().Info(ctx, fmt.Sprintf("发现 %d 个交易额暴增的池子，准备发送通知", len(poolsToNotify)))
-		
+
 		// 发送到 Telegram
 		telegramChatId := g.Cfg().MustGet(ctx, "telegram.chatId", "").String()
 		if telegramChatId != "" {
@@ -266,6 +272,6 @@ func KyberSwapEarnFeeMonitorJob(ctx context.Context) {
 	} else {
 		g.Log().Info(ctx, "没有发现交易额暴增的池子")
 	}
-	
+
 	g.Log().Info(ctx, "KyberSwap EarnFee 监控任务执行完成")
 }

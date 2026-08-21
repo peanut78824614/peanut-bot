@@ -23,6 +23,7 @@ type IKyberSwap interface {
 	GetPoolEarnFeeHistory(ctx context.Context) (map[string]float64, error)
 	GetPoolEarnFeeHistoryWithTime(ctx context.Context) (map[string]EarnFeeHistory, error)
 	UpdatePoolEarnFeeHistory(ctx context.Context, poolID string, earnFee float64) error
+	UpdatePoolEarnFeeHistories(ctx context.Context, updates map[string]float64) error
 }
 // EarnFeeHistory 存储 earnFee 历史值和时间戳
 type EarnFeeHistory struct {
@@ -659,101 +660,4 @@ func (s *kyberSwapImpl) ResetDailySentPools(ctx context.Context) error {
 	
 	g.Log().Info(ctx, fmt.Sprintf("重置今天的已推送记录: %s", filePath))
 	return nil
-}
-
-// GetPoolEarnFeeHistory 获取所有池子的 earnFee 历史值（兼容旧版本）
-func (s *kyberSwapImpl) GetPoolEarnFeeHistory(ctx context.Context) (map[string]float64, error) {
-	historyWithTime, err := s.GetPoolEarnFeeHistoryWithTime(ctx)
-	if err != nil {
-		// 解析失败时回退为空，避免任务中断
-		g.Log().Warning(ctx, "解析 earnFee 历史（含时间戳）失败，将使用空记录继续:", err)
-		return make(map[string]float64), nil
-	}
-	
-	history := make(map[string]float64)
-	for id, h := range historyWithTime {
-		history[id] = h.Value
-	}
-	
-	return history, nil
-}
-
-// GetPoolEarnFeeHistoryWithTime 获取所有池子的 earnFee 历史值和时间戳
-func (s *kyberSwapImpl) GetPoolEarnFeeHistoryWithTime(ctx context.Context) (map[string]EarnFeeHistory, error) {
-	filePath := "data/pool_earn_fee_history.json"
-	
-	if !gfile.Exists(filePath) {
-		return make(map[string]EarnFeeHistory), nil
-	}
-	
-	content := gfile.GetContents(filePath)
-	if content == "" || content == "{}" {
-		return make(map[string]EarnFeeHistory), nil
-	}
-	
-	// 先尝试解析为新格式（带时间戳）
-	var historyWithTime map[string]EarnFeeHistory
-	if err := json.Unmarshal([]byte(content), &historyWithTime); err == nil {
-		// 检查是否是新格式（有 timestamp 字段）
-		if len(historyWithTime) > 0 {
-			for _, h := range historyWithTime {
-				if !h.Timestamp.IsZero() {
-					return historyWithTime, nil
-				}
-			}
-		}
-	}
-	
-	// 如果是旧格式（只有 float64），转换为新格式
-	var oldHistory map[string]float64
-	if err := json.Unmarshal([]byte(content), &oldHistory); err == nil {
-		// 转换为新格式
-		historyWithTime = make(map[string]EarnFeeHistory)
-		for id, value := range oldHistory {
-			historyWithTime[id] = EarnFeeHistory{
-				Value:     value,
-				Timestamp: time.Now(), // 旧数据没有时间戳，使用当前时间
-			}
-		}
-		return historyWithTime, nil
-	}
-	
-	// 兜底：格式异常，返回空记录（不报错，避免打断任务）
-	g.Log().Warning(ctx, "earnFee 历史文件格式异常，已回退为空记录")
-	return make(map[string]EarnFeeHistory), nil
-}
-
-// UpdatePoolEarnFeeHistory 更新指定池子的 earnFee 历史值
-func (s *kyberSwapImpl) UpdatePoolEarnFeeHistory(ctx context.Context, poolID string, earnFee float64) error {
-	filePath := "data/pool_earn_fee_history.json"
-	
-	// 获取现有的历史值（带时间戳）
-	history, err := s.GetPoolEarnFeeHistoryWithTime(ctx)
-	if err != nil {
-		// 解析失败时从空记录开始，避免写入失败
-		g.Log().Warning(ctx, "解析 earnFee 历史失败，使用空记录重新写入:", err)
-		history = make(map[string]EarnFeeHistory)
-	}
-	
-	// 更新指定池子的值和时间戳
-	history[poolID] = EarnFeeHistory{
-		Value:     earnFee,
-		Timestamp: time.Now(),
-	}
-	
-	// 确保目录存在
-	dir := gfile.Dir(filePath)
-	if !gfile.Exists(dir) {
-		if err := gfile.Mkdir(dir); err != nil {
-			return err
-		}
-	}
-	
-	// 保存到文件
-	data, err := json.MarshalIndent(history, "", "  ")
-	if err != nil {
-		return err
-	}
-	
-	return gfile.PutContents(filePath, string(data))
 }
