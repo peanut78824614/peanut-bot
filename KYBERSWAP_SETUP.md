@@ -2,7 +2,7 @@
 
 ## 功能说明
 
-本功能会每30秒自动监控 KyberSwap 的高 APR 池子（BSC 和 Base 链），当发现新池子时，会自动发送美观的通知到 Telegram。
+本功能会每30秒自动监控 KyberSwap 的高 APR 池子（Robinhood、BSC 和 Base 链），当发现新池子时，会自动发送美观的通知到 Telegram。
 
 ## 配置步骤
 
@@ -87,7 +87,7 @@ go run main.go
 
 ## 功能特性
 
-- ✅ 每30秒自动监控（从 page=1 到 page=10）
+- ✅ 每30秒自动监控（page=1，每页 100 条，覆盖 Robinhood / Base / BSC）
 - ✅ 自动检测新池子
 - ✅ 美观的 Telegram 消息格式（支持 Markdown）
 - ✅ 自动保存历史数据
@@ -197,12 +197,13 @@ go run main.go
 ## API 端点说明
 
 代码中使用以下 API 端点：
-- `https://zap-earn-service-v3.kyberengineering.io/api/v1/explorer/pools`
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools`
 
 API 参数：
-- `chainIds=56%2C8453` (BSC 和 Base 链)
-- `page=1-10` (页码)
-- `limit=10` (每页数量)
+- `chainIds=4663%2C8453%2C56` (Robinhood、Base 和 BSC 链)
+- `page=1` (页码)
+- `limit=100` (每页数量；官网 explorer 使用 200，但接口对 limit>100 会返回 500，且当前 high_apr 总量为 100)
+- `interval=24h`
 - `tag=high_apr` (高 APR 标签)
 
 如果该端点不可用或格式不同，代码会自动尝试从 HTML 页面解析数据。
@@ -237,5 +238,5 @@ telegram:
 
 可以在 `config/config.yaml` 中调整：
 - 监控间隔（修改任务调度）
-- 监控的链（修改 API 请求参数）
-- 监控的页数（修改 `FetchAllPools` 中的循环次数）
+- 监控的链（修改 API 请求参数 `chainIds`）
+- 每页数量（修改 API 请求参数 `limit`）

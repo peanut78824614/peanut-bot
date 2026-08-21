@@ -88,6 +88,7 @@ Fees:   $1.00M
 ### 🔍 链标识
 - 🟡 BSC（币安智能链）
 - 🔵 Base（Base 链）
+- 🟢 Robinhood（Robinhood 链）
 - ⛓️ 其他链
 
 ## 首次运行格式

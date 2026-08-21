@@ -36,8 +36,10 @@ var kyberSwapService = kyberSwapImpl{}
 func KyberSwap() IKyberSwap {
 	return &kyberSwapService
 }
-// earnServicePoolsURL Kyber Earn 池子列表 API（接口可能较慢，超时时间较长）
-const earnServicePoolsURL = "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=8453%%2C56&page=%d&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q="
+// earnServicePoolsURL Kyber Earn 池子列表 API
+// 数据来源：Robinhood(4663) + Base(8453) + BSC(56)
+// 说明：官网 explorer 使用 limit=200，但该接口对 limit>100 会返回 500，且 high_apr 当前 totalItems=100，故使用 limit=100 拉全量
+const earnServicePoolsURL = "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=4663%%2C8453%%2C56&page=%d&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q="
 
 // FetchPools 获取指定页面的池子数据（仅保留 tokens 中 symbol 不包含 WETH 的池子）
 func (s *kyberSwapImpl) FetchPools(ctx context.Context, page int) ([]model.Pool, error) {
@@ -284,6 +286,8 @@ func chainNameDisplay(name string) string {
 		return "BNB"
 	case "base":
 		return "Base"
+	case "robinhood":
+		return "Robinhood"
 	case "":
 		return "未知"
 	default:

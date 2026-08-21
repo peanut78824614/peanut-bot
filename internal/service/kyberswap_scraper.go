@@ -13,7 +13,7 @@ import (
 
 // fetchPoolsFromPage 从网页获取池子数据（备用方法）
 func (s *kyberSwapImpl) fetchPoolsFromPage(ctx context.Context, page int) ([]model.Pool, error) {
-	url := fmt.Sprintf("https://kyberswap.com/earn/pools?tag=high_apr&chainIds=56%%2C8453&page=%d", page)
+	url := fmt.Sprintf("https://kyberswap.com/earn/pools?tag=high_apr&chainIds=4663%%2C8453%%2C56&page=%d", page)
 	
 	client := &http.Client{
 		Timeout: 30 * time.Second,
