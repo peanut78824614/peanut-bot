@@ -58,10 +58,10 @@ telegram:
   legacyEnabled: true
   farming:
     enabled: true
-    eth: ""
-    base: ""
-    bsc: ""
-    robinhood: ""
+    eth: "-1003930101541"
+    base: "-1004316652934"
+    bsc: "-1004302102634"
+    robinhood: "-1004386288051"
 
 # 定时任务配置
 cron:
