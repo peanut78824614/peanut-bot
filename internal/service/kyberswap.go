@@ -30,6 +30,8 @@ type IKyberSwap interface {
 	GetPoolEarnFeeHistoryWithTime(ctx context.Context) (map[string]EarnFeeHistory, error)
 	UpdatePoolEarnFeeHistory(ctx context.Context, poolID string, earnFee float64) error
 	UpdatePoolEarnFeeHistories(ctx context.Context, updates map[string]float64) error
+	GetFarmingEarnFeeHistoryWithTime(ctx context.Context, chainID int) (map[string]EarnFeeHistory, error)
+	UpdateFarmingEarnFeeHistories(ctx context.Context, chainID int, updates map[string]float64) error
 }
 
 // EarnFeeHistory 存储 earnFee 历史值和时间戳

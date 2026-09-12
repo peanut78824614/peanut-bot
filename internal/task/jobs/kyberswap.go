@@ -169,6 +169,9 @@ var earnFeeMonitorMu sync.Mutex
 
 // KyberSwapEarnFeeMonitorJob 监控 earnFee 变化的任务
 func KyberSwapEarnFeeMonitorJob(ctx context.Context) {
+	if !g.Cfg().MustGet(ctx, "telegram.legacyEnabled", true).Bool() {
+		return
+	}
 	if !earnFeeMonitorMu.TryLock() {
 		g.Log().Warning(ctx, "上一轮 EarnFee 监控仍在执行，跳过本轮")
 		return
@@ -201,39 +204,7 @@ func KyberSwapEarnFeeMonitorJob(ctx context.Context) {
 	}
 
 	// 找出 earnFee 有明显增加的池子
-	poolsToNotify := make([]model.Pool, 0)
-	// 保存需要推送的池子的历史值（带时间戳），用于显示原值和现值
-	poolsHistory := make(map[string]service.EarnFeeHistory)
-	updates := make(map[string]float64, len(newPools))
-
-	for _, pool := range newPools {
-		historyItem, exists := history[pool.ID]
-		oldEarnFee := historyItem.Value
-		updates[pool.ID] = pool.Fees24h
-
-		// 如果历史值不存在，记录当前值但不推送
-		if !exists {
-			continue
-		}
-
-		// 判断是否有明显增加（例如从100增加到105，即增加5%）
-		// 如果旧值为0，跳过
-		if oldEarnFee <= 0 {
-			continue
-		}
-
-		// 计算增长比例
-		increaseRatio := (pool.Fees24h - oldEarnFee) / oldEarnFee
-
-		// 如果增长超过5%（0.05）且24h手续费大于20，则推送
-		if increaseRatio >= 0.05 && pool.Fees24h > 20 {
-			g.Log().Info(ctx, fmt.Sprintf("池子 %s earnFee 从 %.2f 增加到 %.2f，增长 %.2f%%",
-				pool.ID, oldEarnFee, pool.Fees24h, increaseRatio*100))
-			poolsToNotify = append(poolsToNotify, pool)
-			// 保存历史值（带时间戳），用于显示
-			poolsHistory[pool.ID] = historyItem
-		}
-	}
+	poolsToNotify, poolsHistory, updates := service.DetectEarnFeeSurges(newPools, history)
 
 	if err := kyberSwap.UpdatePoolEarnFeeHistories(ctx, updates); err != nil {
 		g.Log().Error(ctx, "批量更新 earnFee 历史值失败:", err)
@@ -241,6 +212,16 @@ func KyberSwapEarnFeeMonitorJob(ctx context.Context) {
 
 	// 如果有需要推送的池子，发送通知
 	if len(poolsToNotify) > 0 {
+		for _, pool := range poolsToNotify {
+			historyItem := poolsHistory[pool.ID]
+			oldEarnFee := historyItem.Value
+			increaseRatio := 0.0
+			if oldEarnFee > 0 {
+				increaseRatio = (pool.Fees24h - oldEarnFee) / oldEarnFee
+			}
+			g.Log().Info(ctx, fmt.Sprintf("池子 %s earnFee 从 %.2f 增加到 %.2f，增长 %.2f%%",
+				pool.ID, oldEarnFee, pool.Fees24h, increaseRatio*100))
+		}
 		g.Log().Info(ctx, fmt.Sprintf("发现 %d 个交易额暴增的池子，准备发送通知", len(poolsToNotify)))
 
 		// 发送到 Telegram

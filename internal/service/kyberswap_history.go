@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"data/internal/model"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -117,7 +118,10 @@ func recoverJSONObject(raw []byte) ([]byte, bool) {
 }
 
 func loadEarnFeeHistoryUnlocked(ctx context.Context) (map[string]EarnFeeHistory, error) {
-	path := earnFeeHistoryFilePath
+	return loadEarnFeeHistoryFrom(ctx, earnFeeHistoryFilePath)
+}
+
+func loadEarnFeeHistoryFrom(ctx context.Context, path string) (map[string]EarnFeeHistory, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -130,7 +134,7 @@ func loadEarnFeeHistoryUnlocked(ctx context.Context) (map[string]EarnFeeHistory,
 	if parseErr != nil {
 		backupCorruptHistoryFile(ctx, path, content, parseErr)
 		empty := map[string]EarnFeeHistory{}
-		if err := saveEarnFeeHistoryUnlocked(empty); err != nil {
+		if err := saveEarnFeeHistoryTo(path, empty); err != nil {
 			g.Log().Warning(ctx, "重建空的 earnFee 历史文件失败:", err)
 		}
 		return empty, nil
@@ -140,7 +144,7 @@ func loadEarnFeeHistoryUnlocked(ctx context.Context) (map[string]EarnFeeHistory,
 	}
 	if trailing {
 		g.Log().Warning(ctx, "earnFee 历史文件存在尾部残留（多为并发写入导致），已恢复第一个完整 JSON 并重写干净文件")
-		if err := saveEarnFeeHistoryUnlocked(history); err != nil {
+		if err := saveEarnFeeHistoryTo(path, history); err != nil {
 			g.Log().Warning(ctx, "重写干净的 earnFee 历史文件失败:", err)
 		}
 	}
@@ -168,6 +172,10 @@ func sanitizePreview(b []byte) string {
 }
 
 func saveEarnFeeHistoryUnlocked(history map[string]EarnFeeHistory) error {
+	return saveEarnFeeHistoryTo(earnFeeHistoryFilePath, history)
+}
+
+func saveEarnFeeHistoryTo(path string, history map[string]EarnFeeHistory) error {
 	if history == nil {
 		history = map[string]EarnFeeHistory{}
 	}
@@ -175,7 +183,7 @@ func saveEarnFeeHistoryUnlocked(history map[string]EarnFeeHistory) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(earnFeeHistoryFilePath, data)
+	return writeFileAtomic(path, data)
 }
 
 func writeFileAtomic(path string, data []byte) error {
@@ -265,4 +273,73 @@ func (s *kyberSwapImpl) UpdatePoolEarnFeeHistories(ctx context.Context, updates 
 		}
 	}
 	return saveEarnFeeHistoryUnlocked(history)
+}
+
+var (
+	farmingEarnFeeHistoryMu  sync.Mutex
+	farmingEarnFeeHistoryDir = "data"
+)
+
+func farmingEarnFeeHistoryFilePath(chainID int) string {
+	return fmt.Sprintf("%s/farming_earn_fee_history_%d.json", farmingEarnFeeHistoryDir, chainID)
+}
+
+// GetFarmingEarnFeeHistoryWithTime 获取某条链 farming 池子的 earnFee 历史（与旧推送文件隔离）
+func (s *kyberSwapImpl) GetFarmingEarnFeeHistoryWithTime(ctx context.Context, chainID int) (map[string]EarnFeeHistory, error) {
+	farmingEarnFeeHistoryMu.Lock()
+	defer farmingEarnFeeHistoryMu.Unlock()
+	history, err := loadEarnFeeHistoryFrom(ctx, farmingEarnFeeHistoryFilePath(chainID))
+	if err != nil {
+		g.Log().Warning(ctx, "读取 farming earnFee 历史失败，将使用空记录继续:", err)
+		return map[string]EarnFeeHistory{}, nil
+	}
+	return history, nil
+}
+
+// UpdateFarmingEarnFeeHistories 更新某条链 farming 池子的 earnFee 历史
+func (s *kyberSwapImpl) UpdateFarmingEarnFeeHistories(ctx context.Context, chainID int, updates map[string]float64) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	farmingEarnFeeHistoryMu.Lock()
+	defer farmingEarnFeeHistoryMu.Unlock()
+
+	path := farmingEarnFeeHistoryFilePath(chainID)
+	history, err := loadEarnFeeHistoryFrom(ctx, path)
+	if err != nil {
+		g.Log().Warning(ctx, "解析 farming earnFee 历史失败，使用空记录重新写入:", err)
+		history = make(map[string]EarnFeeHistory)
+	}
+	now := time.Now()
+	for poolID, earnFee := range updates {
+		history[poolID] = EarnFeeHistory{
+			Value:     earnFee,
+			Timestamp: now,
+		}
+	}
+	return saveEarnFeeHistoryTo(path, history)
+}
+
+// DetectEarnFeeSurges 与旧群相同的暴增规则：手续费较上次涨幅 >= 5% 且当前 24h 手续费 > 20
+func DetectEarnFeeSurges(pools []model.Pool, history map[string]EarnFeeHistory) (toNotify []model.Pool, notifyHistory map[string]EarnFeeHistory, updates map[string]float64) {
+	toNotify = make([]model.Pool, 0)
+	notifyHistory = make(map[string]EarnFeeHistory)
+	updates = make(map[string]float64, len(pools))
+	if history == nil {
+		history = map[string]EarnFeeHistory{}
+	}
+	for _, pool := range pools {
+		historyItem, exists := history[pool.ID]
+		oldEarnFee := historyItem.Value
+		updates[pool.ID] = pool.Fees24h
+		if !exists || oldEarnFee <= 0 {
+			continue
+		}
+		increaseRatio := (pool.Fees24h - oldEarnFee) / oldEarnFee
+		if increaseRatio >= 0.05 && pool.Fees24h > 20 {
+			toNotify = append(toNotify, pool)
+			notifyHistory[pool.ID] = historyItem
+		}
+	}
+	return toNotify, notifyHistory, updates
 }

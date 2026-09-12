@@ -92,22 +92,60 @@ func notifyFarmingChain(ctx context.Context, kyberSwap service.IKyberSwap, teleg
 
 	if len(poolsToNotify) == 0 {
 		g.Log().Info(ctx, fmt.Sprintf("farming %s 今天所有池子都已推送过，没有新池子", chain.Label))
+	} else {
+		g.Log().Info(ctx, fmt.Sprintf("farming %s 发现 %d 个新池子，准备发送到群组 %s", chain.Label, len(poolsToNotify), chatID))
+
+		message := service.FormatPoolsMessage(poolsToNotify, false)
+		if err := sendFarmingTelegram(ctx, telegram, chatID, message); err != nil {
+			g.Log().Error(ctx, fmt.Sprintf("farming %s 发送 Telegram 失败:", chain.Label), err)
+		} else {
+			g.Log().Info(ctx, fmt.Sprintf("farming %s Telegram 消息发送成功", chain.Label))
+		}
+
+		if err := kyberSwap.AddSentFarmingPoolIDs(ctx, chain.ID, poolIDsToAdd); err != nil {
+			g.Log().Error(ctx, fmt.Sprintf("保存 %s farming 已推送池子 ID 失败:", chain.Label), err)
+		} else {
+			g.Log().Info(ctx, fmt.Sprintf("farming %s 已记录 %d 个池子 ID", chain.Label, len(poolIDsToAdd)))
+		}
+	}
+
+	notifyFarmingEarnFeeSurge(ctx, kyberSwap, telegram, chain, chatID, newPools)
+}
+
+func notifyFarmingEarnFeeSurge(ctx context.Context, kyberSwap service.IKyberSwap, telegram service.ITelegram, chain service.FarmingChain, chatID string, pools []model.Pool) {
+	history, err := kyberSwap.GetFarmingEarnFeeHistoryWithTime(ctx, chain.ID)
+	if err != nil {
+		g.Log().Warning(ctx, fmt.Sprintf("farming %s 获取 earnFee 历史失败，将按空记录继续:", chain.Label), err)
+		history = make(map[string]service.EarnFeeHistory)
+	}
+
+	poolsToNotify, poolsHistory, updates := service.DetectEarnFeeSurges(pools, history)
+	if err := kyberSwap.UpdateFarmingEarnFeeHistories(ctx, chain.ID, updates); err != nil {
+		g.Log().Error(ctx, fmt.Sprintf("farming %s 批量更新 earnFee 历史失败:", chain.Label), err)
+	}
+
+	if len(poolsToNotify) == 0 {
+		g.Log().Info(ctx, fmt.Sprintf("farming %s 没有发现交易额暴增的池子", chain.Label))
 		return
 	}
 
-	g.Log().Info(ctx, fmt.Sprintf("farming %s 发现 %d 个新池子，准备发送到群组 %s", chain.Label, len(poolsToNotify), chatID))
-
-	message := service.FormatPoolsMessage(poolsToNotify, false)
-	if err := sendFarmingTelegram(ctx, telegram, chatID, message); err != nil {
-		g.Log().Error(ctx, fmt.Sprintf("farming %s 发送 Telegram 失败:", chain.Label), err)
-	} else {
-		g.Log().Info(ctx, fmt.Sprintf("farming %s Telegram 消息发送成功", chain.Label))
+	for _, pool := range poolsToNotify {
+		historyItem := poolsHistory[pool.ID]
+		oldEarnFee := historyItem.Value
+		increaseRatio := 0.0
+		if oldEarnFee > 0 {
+			increaseRatio = (pool.Fees24h - oldEarnFee) / oldEarnFee
+		}
+		g.Log().Info(ctx, fmt.Sprintf("farming %s 池子 %s earnFee 从 %.2f 增加到 %.2f，增长 %.2f%%",
+			chain.Label, pool.ID, oldEarnFee, pool.Fees24h, increaseRatio*100))
 	}
+	g.Log().Info(ctx, fmt.Sprintf("farming %s 发现 %d 个交易额暴增的池子，准备发送到群组 %s", chain.Label, len(poolsToNotify), chatID))
 
-	if err := kyberSwap.AddSentFarmingPoolIDs(ctx, chain.ID, poolIDsToAdd); err != nil {
-		g.Log().Error(ctx, fmt.Sprintf("保存 %s farming 已推送池子 ID 失败:", chain.Label), err)
+	message := service.FormatEarnFeeSurgeMessage(poolsToNotify, poolsHistory)
+	if err := sendFarmingTelegram(ctx, telegram, chatID, message); err != nil {
+		g.Log().Error(ctx, fmt.Sprintf("farming %s 发送交易额暴增消息失败:", chain.Label), err)
 	} else {
-		g.Log().Info(ctx, fmt.Sprintf("farming %s 已记录 %d 个池子 ID", chain.Label, len(poolIDsToAdd)))
+		g.Log().Info(ctx, fmt.Sprintf("farming %s 交易额暴增消息发送成功", chain.Label))
 	}
 }
 

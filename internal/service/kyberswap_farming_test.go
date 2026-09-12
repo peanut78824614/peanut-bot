@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"data/internal/model"
 	"os"
 	"testing"
 )
@@ -56,5 +57,69 @@ func TestFetchFarmingPoolsByChainLive(t *testing.T) {
 				t.Fatalf("%s pool chainID=%d", chain.Label, p.ChainID)
 			}
 		}
+	}
+}
+
+func TestDetectEarnFeeSurges(t *testing.T) {
+	history := map[string]EarnFeeHistory{
+		"same":   {Value: 100},
+		"surge":  {Value: 100},
+		"small":  {Value: 100},
+		"lowfee": {Value: 10},
+		"zero":   {Value: 0},
+	}
+	pools := []model.Pool{
+		{ID: "same", Fees24h: 104},
+		{ID: "surge", Fees24h: 106},
+		{ID: "small", Fees24h: 101},
+		{ID: "lowfee", Fees24h: 15},
+		{ID: "zero", Fees24h: 50},
+		{ID: "new", Fees24h: 80},
+	}
+	got, notifyHistory, updates := DetectEarnFeeSurges(pools, history)
+	if len(got) != 1 || got[0].ID != "surge" {
+		t.Fatalf("toNotify=%v", got)
+	}
+	if notifyHistory["surge"].Value != 100 {
+		t.Fatalf("history=%v", notifyHistory)
+	}
+	if updates["surge"] != 106 || updates["new"] != 80 {
+		t.Fatalf("updates=%v", updates)
+	}
+}
+
+func TestFarmingEarnFeeHistoryIsolation(t *testing.T) {
+	dir := t.TempDir()
+	farmingEarnFeeHistoryMu.Lock()
+	old := farmingEarnFeeHistoryDir
+	farmingEarnFeeHistoryDir = dir
+	farmingEarnFeeHistoryMu.Unlock()
+	t.Cleanup(func() {
+		farmingEarnFeeHistoryMu.Lock()
+		farmingEarnFeeHistoryDir = old
+		farmingEarnFeeHistoryMu.Unlock()
+	})
+
+	s := &kyberSwapImpl{}
+	ctx := context.Background()
+	if err := s.UpdateFarmingEarnFeeHistories(ctx, 1, map[string]float64{"eth-pool": 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateFarmingEarnFeeHistories(ctx, 56, map[string]float64{"bsc-pool": 20}); err != nil {
+		t.Fatal(err)
+	}
+	eth, err := s.GetFarmingEarnFeeHistoryWithTime(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bsc, err := s.GetFarmingEarnFeeHistoryWithTime(ctx, 56)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eth["eth-pool"].Value != 10 || eth["bsc-pool"].Value != 0 {
+		t.Fatalf("eth=%v", eth)
+	}
+	if bsc["bsc-pool"].Value != 20 || bsc["eth-pool"].Value != 0 {
+		t.Fatalf("bsc=%v", bsc)
 	}
 }
