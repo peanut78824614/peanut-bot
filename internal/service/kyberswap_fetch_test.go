@@ -24,10 +24,10 @@ func TestEarnServicePoolURLs_PerChain(t *testing.T) {
 
 func TestFarmingServicePoolURLs_PerChain(t *testing.T) {
 	want := map[int]string{
-		1:    "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=1&page=1&limit=100&interval=24h&protocol=&tag=farming_pool&sortBy=&orderBy=&q=",
-		8453: "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=8453&page=1&limit=100&interval=24h&protocol=&tag=farming_pool&sortBy=&orderBy=&q=",
-		56:   "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=56&page=1&limit=100&interval=24h&protocol=&tag=farming_pool&sortBy=&orderBy=&q=",
-		4663: "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=4663&page=1&limit=100&interval=24h&protocol=&tag=farming_pool&sortBy=&orderBy=&q=",
+		1:    "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=1&page=1&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q=",
+		8453: "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=8453&page=1&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q=",
+		56:   "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=56&page=1&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q=",
+		4663: "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=4663&page=1&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q=",
 	}
 	chains := FarmingChains()
 	if len(chains) != 4 {

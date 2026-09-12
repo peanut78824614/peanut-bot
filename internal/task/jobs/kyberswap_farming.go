@@ -76,7 +76,7 @@ func notifyFarmingChain(ctx context.Context, kyberSwap service.IKyberSwap, teleg
 
 	newPools, err := kyberSwap.FetchFarmingPoolsByChain(ctx, chain.ID)
 	if err != nil {
-		g.Log().Error(ctx, fmt.Sprintf("获取 %s farming_pool 数据失败:", chain.Label), err)
+		g.Log().Error(ctx, fmt.Sprintf("获取 %s high_apr 数据失败:", chain.Label), err)
 		return
 	}
 	g.Log().Info(ctx, fmt.Sprintf("farming %s 获取到 %d 个池子（不过滤）", chain.Label, len(newPools)))

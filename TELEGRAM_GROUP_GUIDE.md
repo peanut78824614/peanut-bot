@@ -2,7 +2,7 @@
 
 ## 创建 4 个链群组 + 获取 Bot ID（farming 按链推送）
 
-旧的 `high_apr` 单群推送继续走 `telegram.chatId`，不要改。下面只给 **farming_pool 新推送** 建 4 个群。
+旧的 `high_apr` 单群推送继续走 `telegram.chatId`，不要改。下面只给 **按链拆群的新推送** 建 4 个群。
 
 可以直接复用现在配置里的同一个 Bot，不必再申请新 Bot。
 

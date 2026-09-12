@@ -11,9 +11,9 @@ import (
 	"github.com/gogf/gf/v2/os/gfile"
 )
 
-// farming_pool 新推送：与原 high_apr 单群推送完全独立。
-// ETH(1) / Base(8453) / BSC(56) / Robinhood(4663) 各请求一次，不过滤池子，按链推送到各自群组。
-const farmingServicePoolsURL = "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=%d&page=%d&limit=100&interval=24h&protocol=&tag=farming_pool&sortBy=&orderBy=&q="
+// 四条链按群推送：与原 high_apr 单群推送完全独立。
+// ETH(1) / Base(8453) / BSC(56) / Robinhood(4663) 各请求一次 tag=high_apr，不过滤池子，按链推送到各自群组。
+const farmingServicePoolsURL = "https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=%d&page=%d&limit=100&interval=24h&protocol=&tag=high_apr&sortBy=&orderBy=&q="
 
 const (
 	farmingEthChainID       = 1
@@ -58,15 +58,15 @@ func FarmingPushEnabled(ctx context.Context) bool {
 	return g.Cfg().MustGet(ctx, "telegram.farming.enabled", false).Bool()
 }
 
-// FetchFarmingPoolsByChain 拉取指定链的 farming_pool 池子（不过滤）
+// FetchFarmingPoolsByChain 拉取指定链的 high_apr 池子（不过滤）
 func (s *kyberSwapImpl) FetchFarmingPoolsByChain(ctx context.Context, chainID int) ([]model.Pool, error) {
 	url := farmingServiceURL(chainID, 1)
-	g.Log().Info(ctx, fmt.Sprintf("正在获取 farming_pool %s(%d) page=1 的池子数据...", earnServiceChainLabel(chainID), chainID))
+	g.Log().Info(ctx, fmt.Sprintf("正在获取 high_apr %s(%d) page=1 的池子数据...", earnServiceChainLabel(chainID), chainID))
 	pools, err := s.fetchPoolsFromURL(ctx, url, true)
 	if err != nil {
 		return nil, err
 	}
-	g.Log().Info(ctx, fmt.Sprintf("farming_pool %s(%d) 解析到 %d 个池子（不过滤）", earnServiceChainLabel(chainID), chainID, len(pools)))
+	g.Log().Info(ctx, fmt.Sprintf("high_apr %s(%d) 解析到 %d 个池子（不过滤）", earnServiceChainLabel(chainID), chainID, len(pools)))
 	return pools, nil
 }
 

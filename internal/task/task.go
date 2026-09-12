@@ -37,7 +37,6 @@ func registerTasks(ctx context.Context) {
 	// 注意：标准 cron 不支持秒级，使用 GoFrame 的 @every 语法
 	cron.Add(ctx, "@every 3s", jobs.KyberSwapMonitorJob, "kyberswap_monitor")
 
-	// farming_pool 按链拆群推送：与上面旧任务并行，确认跑通后再关闭旧任务
 	cron.Add(ctx, "@every 3s", jobs.KyberSwapFarmingMonitorJob, "kyberswap_farming_monitor")
 
 	// KyberSwap EarnFee 监控任务：每3秒执行一次，监控交易额暴增

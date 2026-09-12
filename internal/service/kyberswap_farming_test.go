@@ -47,7 +47,7 @@ func TestFetchFarmingPoolsByChainLive(t *testing.T) {
 			t.Skipf("network fetch %s failed: %v", chain.Label, err)
 		}
 		if len(pools) == 0 {
-			t.Fatalf("%s farming_pool returned 0 pools", chain.Label)
+			t.Fatalf("%s high_apr returned 0 pools", chain.Label)
 		}
 		for _, p := range pools {
 			if p.ID == "" {

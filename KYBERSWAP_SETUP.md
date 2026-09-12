@@ -7,7 +7,7 @@
 当前有两套推送，互不影响：
 
 1. **旧推送（保持不变）**：`tag=high_apr`，Robinhood / Base / BSC 合并后推到单个群组 `telegram.chatId`。Base/BSC 仍过滤 WETH、需含稳定币。
-2. **新推送（farming_pool 按链拆群）**：`tag=farming_pool`，ETH / Base / BSC / Robinhood 各拉一次，**不过滤池子**，分别推到 `telegram.farming.eth|base|bsc|robinhood`。跑通后再关闭旧推送。
+2. **新推送（按链拆群）**：`tag=high_apr`，ETH / Base / BSC / Robinhood 各拉一次，**不过滤池子**，分别推到 `telegram.farming.eth|base|bsc|robinhood`。跑通后再关闭旧推送。
 
 ## 配置步骤
 
@@ -99,7 +99,7 @@ go run main.go
 ## 功能特性
 
 - ✅ 旧推送：high_apr，三条链合并推到单群（逻辑不变）
-- ✅ 新推送：farming_pool，ETH / Base / BSC / Robinhood 各推到各自群组，不过滤池子
+- ✅ 新推送：high_apr，ETH / Base / BSC / Robinhood 各推到各自群组，不过滤池子
 - ✅ 自动检测当天未推送过的池子
 - ✅ 美观的 Telegram 消息格式（支持 Markdown）
 - ✅ 新旧推送的已发送记录分开存储，互不影响
@@ -222,12 +222,12 @@ API 参数：
 
 三条链的结果会合并去重后再进入监控逻辑。
 
-### farming_pool 新推送（按链拆群，不过滤）
+### 四条链按群推送（high_apr，不过滤）
 
-- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=1&page=1&limit=100&interval=24h&tag=farming_pool` (ETH)
-- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=8453&page=1&limit=100&interval=24h&tag=farming_pool` (Base)
-- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=56&page=1&limit=100&interval=24h&tag=farming_pool` (BSC)
-- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=4663&page=1&limit=100&interval=24h&tag=farming_pool` (Robinhood)
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=1&page=1&limit=100&interval=24h&tag=high_apr` (ETH)
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=8453&page=1&limit=100&interval=24h&tag=high_apr` (Base)
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=56&page=1&limit=100&interval=24h&tag=high_apr` (BSC)
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=4663&page=1&limit=100&interval=24h&tag=high_apr` (Robinhood)
 
 每条链的结果单独推送到对应群组，不做 WETH / 稳定币过滤。已推送记录写在 `data/farming_sent_pools_<chainId>_<日期>.json`，不会动旧的 `data/sent_pools_*.json`。
 
