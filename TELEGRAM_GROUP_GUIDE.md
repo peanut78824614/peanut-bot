@@ -1,6 +1,95 @@
 # Telegram Bot 群组发送消息指南
 
-## 完整步骤
+## 创建 4 个链群组 + 获取 Bot ID（farming 按链推送）
+
+旧的 `high_apr` 单群推送继续走 `telegram.chatId`，不要改。下面只给 **farming_pool 新推送** 建 4 个群。
+
+可以直接复用现在配置里的同一个 Bot，不必再申请新 Bot。
+
+### A. 查看 Bot ID 和用户名
+
+项目跑起来后访问：
+
+```
+http://localhost:8000/api/v1/telegram/bot
+```
+
+返回里的：
+
+- `id`：Bot 数字 ID（例如 `7195943995`）
+- `username`：Bot 用户名（添加群成员时搜索 `@username`）
+
+也可以在 Telegram 搜 `@BotFather`，发 `/mybots`，选中你的 Bot 查看。
+
+Token 格式是 `BotID:密钥`，冒号前面那串就是 Bot ID。当前项目已配置 Token，一般不用重建 Bot。
+
+如果还没有 Bot：
+
+1. Telegram 搜索 `@BotFather`
+2. 发送 `/newbot`
+3. 按提示设置名称和用户名（用户名必须以 `bot` 结尾）
+4. 复制 Token，填到 `config/config.yaml` 的 `telegram.botToken`
+
+### B. 创建 4 个群组
+
+在 Telegram 里各建一个群，建议命名：
+
+1. `ETH Farming`
+2. `Base Farming`
+3. `BSC Farming`
+4. `Robinhood Farming`
+
+步骤（每个群做一遍）：
+
+1. 打开 Telegram → 左上菜单 / 铅笔 → **新建群组**
+2. 先把自己加进去，填群名
+3. 创建后点群名称 → **添加成员** → 搜索 `@你的Bot用户名` → 添加
+4. 群设置 → **管理员** → 把 Bot 设为管理员，至少打开 **发送消息**
+5. 在群里随便发一条消息（例如 `test`），让 Bot 能看到这个群
+
+### C. 获取每个群的 Chat ID
+
+Bot 被加进群并收到一条消息后，访问：
+
+```
+http://localhost:8000/api/v1/telegram/updates
+```
+
+在返回的 `chats` 里找对应群名，`id` 就是 Chat ID（超级群通常是 `-100` 开头的负数）。
+
+也可以浏览器打开（把 Token 换成你的）：
+
+```
+https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates
+```
+
+找到 `"chat":{"id":-100xxxxxxxxxx,"title":"ETH Farming",...}`。
+
+填到配置（旧的 `chatId` 不要动）：
+
+```yaml
+telegram:
+  botToken: "你的Bot Token"
+  chatId: "-1003643474581"   # 旧推送，保持不变
+  farming:
+    enabled: true
+    eth: "-100..."          # ETH 群
+    base: "-100..."         # Base 群
+    bsc: "-100..."          # BSC 群
+    robinhood: "-100..."    # Robinhood 群
+```
+
+改完配置后重启项目。然后可以：
+
+- 预览四条链池子（不推送）：`http://localhost:8000/api/v1/telegram/farming-preview`
+- 给已配置的链群发测试消息：`http://localhost:8000/api/v1/telegram/test-farming`
+- 只测一条链：`http://localhost:8000/api/v1/telegram/test-farming?chain=eth`
+
+确认 4 个群都能收到后，新推送就算跑通。之后再把旧的 `kyberswap_monitor` 关掉。
+
+---
+
+## 完整步骤（旧单群推送，逻辑不变）
 
 ### 1. 将 Bot 添加到群组
 

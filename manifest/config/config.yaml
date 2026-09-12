@@ -51,6 +51,18 @@ app:
   version: "1.0.0"
   env: "prod"
 
+# Telegram 配置
+telegram:
+  botToken: "7195943995:AAGkxidmBEBY2GzrdhYb2OPEpRiuxY_LtbQ"
+  chatId: "-1003643474581"
+  legacyEnabled: true
+  farming:
+    enabled: true
+    eth: ""
+    base: ""
+    bsc: ""
+    robinhood: ""
+
 # 定时任务配置
 cron:
   enabled: true

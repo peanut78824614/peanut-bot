@@ -8,8 +8,8 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -24,26 +24,27 @@ type ITelegram interface {
 	SendPhotoByURL(ctx context.Context, chatID string, photoURL string, caption string) error
 	GetUpdates(ctx context.Context) ([]Update, error)
 	GetChatInfo(ctx context.Context, chatID string) (*ChatInfo, error)
+	GetMe(ctx context.Context) (*BotInfo, error)
 }
 
 // Update 表示Telegram更新
 type Update struct {
-	UpdateID int64 `json:"update_id"`
+	UpdateID int64    `json:"update_id"`
 	Message  *Message `json:"message,omitempty"`
 }
 
 // Message 表示Telegram消息
 type Message struct {
-	MessageID int64 `json:"message_id"`
+	MessageID int64         `json:"message_id"`
 	From      *TelegramUser `json:"from,omitempty"`
-	Chat      *Chat `json:"chat"`
-	Text      string `json:"text,omitempty"`
-	Date      int64 `json:"date"`
+	Chat      *Chat         `json:"chat"`
+	Text      string        `json:"text,omitempty"`
+	Date      int64         `json:"date"`
 }
 
 // TelegramUser 表示Telegram用户
 type TelegramUser struct {
-	ID        int64 `json:"id"`
+	ID        int64  `json:"id"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name,omitempty"`
 	Username  string `json:"username,omitempty"`
@@ -51,7 +52,7 @@ type TelegramUser struct {
 
 // Chat 表示Telegram聊天
 type Chat struct {
-	ID        int64 `json:"id"`
+	ID        int64  `json:"id"`
 	Type      string `json:"type"` // "private", "group", "supergroup", "channel"
 	Title     string `json:"title,omitempty"`
 	Username  string `json:"username,omitempty"`
@@ -61,12 +62,20 @@ type Chat struct {
 
 // ChatInfo 表示聊天信息
 type ChatInfo struct {
-	ID        int64 `json:"id"`
+	ID        int64  `json:"id"`
 	Type      string `json:"type"`
 	Title     string `json:"title,omitempty"`
 	Username  string `json:"username,omitempty"`
 	FirstName string `json:"first_name,omitempty"`
 	LastName  string `json:"last_name,omitempty"`
+}
+
+// BotInfo 表示 Bot 自身信息（getMe）
+type BotInfo struct {
+	ID        int64  `json:"id"`
+	IsBot     bool   `json:"is_bot"`
+	FirstName string `json:"first_name"`
+	Username  string `json:"username"`
 }
 
 type telegramImpl struct {
@@ -102,10 +111,10 @@ func (s *telegramImpl) SendMessageWithMarkdownAndButton(ctx context.Context, cha
 
 // telegramSendBody 用于 JSON 方式发送带按钮的消息，保证 reply_markup 正确传递
 type telegramSendBody struct {
-	ChatID                string                 `json:"chat_id"`
-	Text                  string                 `json:"text"`
-	ParseMode             string                 `json:"parse_mode,omitempty"`
-	DisableWebPagePreview bool                   `json:"disable_web_page_preview,omitempty"`
+	ChatID                string                  `json:"chat_id"`
+	Text                  string                  `json:"text"`
+	ParseMode             string                  `json:"parse_mode,omitempty"`
+	DisableWebPagePreview bool                    `json:"disable_web_page_preview,omitempty"`
 	ReplyMarkup           *telegramInlineKeyboard `json:"reply_markup,omitempty"`
 }
 type telegramInlineKeyboard struct {
@@ -334,6 +343,46 @@ func (s *telegramImpl) GetChatInfo(ctx context.Context, chatID string) (*ChatInf
 	return &result.Result, nil
 }
 
+// GetMe 获取当前 Bot 信息（Bot ID / 用户名）
+func (s *telegramImpl) GetMe(ctx context.Context) (*BotInfo, error) {
+	if s.botToken == "" {
+		return nil, fmt.Errorf("Telegram bot token 未配置")
+	}
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", s.botToken)
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Telegram API 错误: HTTP %d, 响应: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		OK     bool    `json:"ok"`
+		Result BotInfo `json:"result"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %v, 响应: %s", err, string(body))
+	}
+	if !result.OK {
+		return nil, fmt.Errorf("Telegram API 返回失败")
+	}
+	return &result.Result, nil
+}
+
 // SendPhotoByURL 通过图片 URL 发送图片到 Telegram（Telegram 会从该 URL 拉取图片）
 func (s *telegramImpl) SendPhotoByURL(ctx context.Context, chatID string, photoURL string, caption string) error {
 	if s.botToken == "" {
@@ -403,7 +452,7 @@ func (s *telegramImpl) SendPhoto(ctx context.Context, chatID string, photoPath s
 
 	// 添加chat_id
 	writer.WriteField("chat_id", chatID)
-	
+
 	// 添加caption（如果有）
 	if caption != "" {
 		writer.WriteField("caption", caption)

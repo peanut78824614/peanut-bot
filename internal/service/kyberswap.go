@@ -16,12 +16,16 @@ import (
 type IKyberSwap interface {
 	FetchPools(ctx context.Context, page int) ([]model.Pool, error)
 	FetchAllPools(ctx context.Context) ([]model.Pool, error)
+	FetchFarmingPoolsByChain(ctx context.Context, chainID int) ([]model.Pool, error)
 	GetStoredPools(ctx context.Context) ([]model.Pool, error)
 	SavePools(ctx context.Context, pools []model.Pool) error
 	ComparePools(oldPools, newPools []model.Pool) []model.Pool
 	GetTodaySentPoolIDs(ctx context.Context) (map[string]bool, error)
 	AddSentPoolIDs(ctx context.Context, poolIDs []string) error
 	ResetDailySentPools(ctx context.Context) error
+	GetTodaySentFarmingPoolIDs(ctx context.Context, chainID int) (map[string]bool, error)
+	AddSentFarmingPoolIDs(ctx context.Context, chainID int, poolIDs []string) error
+	ResetDailySentFarmingPools(ctx context.Context) error
 	GetPoolEarnFeeHistory(ctx context.Context) (map[string]float64, error)
 	GetPoolEarnFeeHistoryWithTime(ctx context.Context) (map[string]EarnFeeHistory, error)
 	UpdatePoolEarnFeeHistory(ctx context.Context, poolID string, earnFee float64) error
@@ -53,6 +57,8 @@ var earnServiceChainIDs = []int{robinhoodChainID, 8453, 56}
 
 func earnServiceChainLabel(chainID int) string {
 	switch chainID {
+	case 1:
+		return "ETH"
 	case robinhoodChainID:
 		return "Robinhood"
 	case 8453:
@@ -78,7 +84,7 @@ func (s *kyberSwapImpl) fetchPoolsByChains(ctx context.Context, chainIDs []int, 
 	for _, chainID := range chainIDs {
 		url := fmt.Sprintf(earnServicePoolsURL, chainID, page)
 		g.Log().Info(ctx, fmt.Sprintf("正在获取 %s(%d) page=%d 的池子数据...", earnServiceChainLabel(chainID), chainID, page))
-		pools, err := s.fetchPoolsFromURL(ctx, url)
+		pools, err := s.fetchPoolsFromURL(ctx, url, false)
 		if err != nil {
 			lastErr = err
 			g.Log().Error(ctx, fmt.Sprintf("获取 %s(%d) 池子数据失败: %v", earnServiceChainLabel(chainID), chainID, err))
@@ -104,8 +110,10 @@ func (s *kyberSwapImpl) fetchPoolsByChains(ctx context.Context, chainIDs []int, 
 	return allPools, nil
 }
 
-// fetchPoolsFromURL 请求单个 URL 并解析池子（过滤含 WETH，且需包含 USDT/USDC/USDG）
-func (s *kyberSwapImpl) fetchPoolsFromURL(ctx context.Context, url string) ([]model.Pool, error) {
+// fetchPoolsFromURL 请求单个 URL 并解析池子。
+// keepAll=false：沿用旧逻辑（Base/BSC 过滤 WETH、需含稳定币；Robinhood 全部保留）。
+// keepAll=true：不过滤，接口返回的池子全部解析推送。
+func (s *kyberSwapImpl) fetchPoolsFromURL(ctx context.Context, url string, keepAll bool) ([]model.Pool, error) {
 	client := &http.Client{
 		Timeout: 90 * time.Second, // 接口可能较慢，延长等待
 	}
@@ -149,7 +157,7 @@ func (s *kyberSwapImpl) fetchPoolsFromURL(ctx context.Context, url string) ([]mo
 	appendParsed := func(poolsData []interface{}) {
 		rawCount += len(poolsData)
 		for i, p := range poolsData {
-			if pool := s.parsePoolFromInterface(p); pool != nil {
+			if pool := s.parsePoolFromInterface(p, keepAll); pool != nil {
 				pools = append(pools, *pool)
 			} else {
 				parseFailedCount++
@@ -194,7 +202,11 @@ func (s *kyberSwapImpl) fetchPoolsFromURL(ctx context.Context, url string) ([]mo
 
 	if len(pools) == 0 {
 		if rawCount > 0 {
-			g.Log().Warning(ctx, fmt.Sprintf("接口返回 %d 个池子，过滤后为 0（Base/BSC 需含 USDT/USDC/USDG 且不含 WETH；Robinhood 全部保留）", rawCount))
+			if keepAll {
+				g.Log().Warning(ctx, fmt.Sprintf("接口返回 %d 个池子，但全部解析失败（缺少池子 ID 等）", rawCount))
+			} else {
+				g.Log().Warning(ctx, fmt.Sprintf("接口返回 %d 个池子，过滤后为 0（Base/BSC 需含 USDT/USDC/USDG 且不含 WETH；Robinhood 全部保留）", rawCount))
+			}
 			return []model.Pool{}, nil
 		}
 		g.Log().Warning(ctx, "未能解析出池子数据，响应格式可能不同")
@@ -336,6 +348,8 @@ func chainNameDisplay(name string) string {
 		return "BNB"
 	case "base":
 		return "Base"
+	case "ethereum", "eth":
+		return "ETH"
 	case "robinhood":
 		return "Robinhood"
 	case "":
@@ -543,9 +557,10 @@ func poolChainIDFromMap(poolMap map[string]interface{}) int {
 	return 0
 }
 
-// parsePoolFromInterface 解析池子。Base/BSC 仍过滤 WETH、且需含 USDT/USDC/USDG；
-// Robinhood(4663) 不过滤，接口返回的全部推送。
-func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
+// parsePoolFromInterface 解析池子。
+// keepAll=false：Base/BSC 仍过滤 WETH、且需含 USDT/USDC/USDG；Robinhood(4663) 不过滤。
+// keepAll=true：所有链都不过滤，接口返回的全部解析。
+func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}, keepAll bool) *model.Pool {
 	poolMap, ok := data.(map[string]interface{})
 	if !ok {
 		return nil
@@ -553,7 +568,9 @@ func (s *kyberSwapImpl) parsePoolFromInterface(data interface{}) *model.Pool {
 
 	tokens, _ := poolMap["tokens"].([]interface{})
 	chainID := poolChainIDFromMap(poolMap)
-	keepAll := chainID == robinhoodChainID
+	if !keepAll {
+		keepAll = chainID == robinhoodChainID
+	}
 	if !keepAll {
 		if len(tokens) < 2 {
 			return nil

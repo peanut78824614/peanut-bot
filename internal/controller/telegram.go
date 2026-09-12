@@ -57,10 +57,10 @@ func (c *TelegramController) GetUpdates(r *ghttp.Request) {
 		"code":    200,
 		"message": "success",
 		"data": g.Map{
-			"chats":  chats,
-			"count":  len(chats),
-			"total":  len(updates),
-			"tip":    "在群组或个人聊天中发送任意消息给 Bot，然后刷新此接口即可看到 Chat ID",
+			"chats": chats,
+			"count": len(chats),
+			"total": len(updates),
+			"tip":   "在群组或个人聊天中发送任意消息给 Bot，然后刷新此接口即可看到 Chat ID",
 		},
 	})
 }
@@ -108,7 +108,7 @@ func (c *TelegramController) GetChatInfo(r *ghttp.Request) {
 func (c *TelegramController) SendTestMessage(r *ghttp.Request) {
 	ctx := r.Context()
 	telegram := service.Telegram()
-	
+
 	// 获取配置的 Chat ID
 	chatID := g.Cfg().MustGet(ctx, "telegram.chatId", "").String()
 	if chatID == "" {
@@ -119,65 +119,65 @@ func (c *TelegramController) SendTestMessage(r *ghttp.Request) {
 		})
 		return
 	}
-	
+
 	// 创建示例池子数据
 	testPools := []model.Pool{
 		{
-			ID:          "test-pool-1",
-			Name:        "USDC/USDT",
-			APR:         125.50,
-			TVL:         2500000,
-			ChainID:     56,
-			Token0:      "0x123...",
-			Token1:      "0x456...",
+			ID:           "test-pool-1",
+			Name:         "USDC/USDT",
+			APR:          125.50,
+			TVL:          2500000,
+			ChainID:      56,
+			Token0:       "0x123...",
+			Token1:       "0x456...",
 			Token0Symbol: "USDC",
 			Token1Symbol: "USDT",
-			Volume24h:   1200000,
-			Fees24h:     500000,
-			URL:         "https://kyberswap.com/earn/pools/test-pool-1",
-			Version:     "v4",
-			FeeTier:     1,
-			Protocol:    "Uniswap",
+			Volume24h:    1200000,
+			Fees24h:      500000,
+			URL:          "https://kyberswap.com/earn/pools/test-pool-1",
+			Version:      "v4",
+			FeeTier:      1,
+			Protocol:     "Uniswap",
 		},
 		{
-			ID:          "test-pool-2",
-			Name:        "ETH/BTC",
-			APR:         98.75,
-			TVL:         5000000,
-			ChainID:     8453,
-			Token0:      "0x789...",
-			Token1:      "0xabc...",
+			ID:           "test-pool-2",
+			Name:         "ETH/BTC",
+			APR:          98.75,
+			TVL:          5000000,
+			ChainID:      8453,
+			Token0:       "0x789...",
+			Token1:       "0xabc...",
 			Token0Symbol: "ETH",
 			Token1Symbol: "BTC",
-			Volume24h:   2500000,
-			Fees24h:     1000000,
-			URL:         "https://kyberswap.com/earn/pools/test-pool-2",
-			Version:     "v3",
-			FeeTier:     3,
-			Protocol:    "Pancake",
+			Volume24h:    2500000,
+			Fees24h:      1000000,
+			URL:          "https://kyberswap.com/earn/pools/test-pool-2",
+			Version:      "v3",
+			FeeTier:      3,
+			Protocol:     "Pancake",
 		},
 		{
-			ID:          "test-pool-3",
-			Name:        "BNB/CAKE",
-			APR:         156.80,
-			TVL:         1800000,
-			ChainID:     56,
-			Token0:      "0xdef...",
-			Token1:      "0xghi...",
+			ID:           "test-pool-3",
+			Name:         "BNB/CAKE",
+			APR:          156.80,
+			TVL:          1800000,
+			ChainID:      56,
+			Token0:       "0xdef...",
+			Token1:       "0xghi...",
 			Token0Symbol: "BNB",
 			Token1Symbol: "CAKE",
-			Volume24h:   800000,
-			Fees24h:     320000,
-			URL:         "https://kyberswap.com/earn/pools/test-pool-3",
-			Version:     "v4",
-			FeeTier:     1,
-			Protocol:    "Uniswap",
+			Volume24h:    800000,
+			Fees24h:      320000,
+			URL:          "https://kyberswap.com/earn/pools/test-pool-3",
+			Version:      "v4",
+			FeeTier:      1,
+			Protocol:     "Uniswap",
 		},
 	}
-	
+
 	// 格式化消息
 	message := service.FormatPoolsMessage(testPools, false)
-	
+
 	// 发送消息
 	if err := telegram.SendMessageWithMarkdown(ctx, chatID, message); err != nil {
 		r.Response.WriteJson(g.Map{
@@ -187,7 +187,7 @@ func (c *TelegramController) SendTestMessage(r *ghttp.Request) {
 		})
 		return
 	}
-	
+
 	r.Response.WriteJson(g.Map{
 		"code":    200,
 		"message": "测试消息发送成功！请查看 Telegram 群组",
@@ -195,6 +195,131 @@ func (c *TelegramController) SendTestMessage(r *ghttp.Request) {
 			"chatId": chatID,
 			"pools":  len(testPools),
 			"tip":    "这是测试消息，展示了消息格式效果",
+		},
+	})
+}
+
+// GetBotInfo 获取当前 Bot 的 ID 和用户名
+func (c *TelegramController) GetBotInfo(r *ghttp.Request) {
+	ctx := r.Context()
+	telegram := service.Telegram()
+	bot, err := telegram.GetMe(ctx)
+	if err != nil {
+		r.Response.WriteJson(g.Map{
+			"code":    500,
+			"message": "获取 Bot 信息失败: " + err.Error(),
+			"data":    nil,
+		})
+		return
+	}
+	r.Response.WriteJson(g.Map{
+		"code":    200,
+		"message": "success",
+		"data": g.Map{
+			"id":       bot.ID,
+			"username": bot.Username,
+			"name":     bot.FirstName,
+			"isBot":    bot.IsBot,
+			"tip":      "在群组中添加成员时搜索 @" + bot.Username,
+		},
+	})
+}
+
+// SendFarmingTestMessage 向已配置 Chat ID 的 farming 链群组发送测试消息
+func (c *TelegramController) SendFarmingTestMessage(r *ghttp.Request) {
+	ctx := r.Context()
+	telegram := service.Telegram()
+	only := r.Get("chain").String()
+
+	results := make([]g.Map, 0)
+	sent := 0
+	for _, chain := range service.FarmingChains() {
+		if only != "" && only != chain.Key {
+			continue
+		}
+		chatID := service.FarmingChatID(ctx, chain.Key)
+		item := g.Map{
+			"chain":  chain.Label,
+			"key":    chain.Key,
+			"chatId": chatID,
+		}
+		if chatID == "" {
+			item["ok"] = false
+			item["error"] = "未配置 telegram.farming." + chain.Key
+			results = append(results, item)
+			continue
+		}
+		msg := "　　　　🔴🔴  高收益流动性提醒 🔴🔴\n\n" +
+			"这是 *" + chain.Label + "* 链 farming_pool 测试消息。\n\n" +
+			"如果看到这条，说明该群组 Chat ID 配置正确。"
+		if err := telegram.SendMessageWithMarkdown(ctx, chatID, msg); err != nil {
+			item["ok"] = false
+			item["error"] = err.Error()
+		} else {
+			item["ok"] = true
+			sent++
+		}
+		results = append(results, item)
+	}
+
+	r.Response.WriteJson(g.Map{
+		"code":    200,
+		"message": "farming 测试完成",
+		"data": g.Map{
+			"sent":    sent,
+			"results": results,
+			"tip":     "可加参数 ?chain=eth|base|bsc|robinhood 只测一条链",
+		},
+	})
+}
+
+// FarmingPreview 拉取四条链 farming_pool 数据并返回数量（不推送 Telegram）
+func (c *TelegramController) FarmingPreview(r *ghttp.Request) {
+	ctx := r.Context()
+	kyber := service.KyberSwap()
+	chains := make([]g.Map, 0, 4)
+	total := 0
+	for _, chain := range service.FarmingChains() {
+		item := g.Map{
+			"chain":  chain.Label,
+			"key":    chain.Key,
+			"id":     chain.ID,
+			"chatId": service.FarmingChatID(ctx, chain.Key),
+		}
+		pools, err := kyber.FetchFarmingPoolsByChain(ctx, chain.ID)
+		if err != nil {
+			item["ok"] = false
+			item["error"] = err.Error()
+			item["count"] = 0
+		} else {
+			item["ok"] = true
+			item["count"] = len(pools)
+			total += len(pools)
+			preview := make([]g.Map, 0)
+			limit := 3
+			if len(pools) < limit {
+				limit = len(pools)
+			}
+			for i := 0; i < limit; i++ {
+				p := pools[i]
+				preview = append(preview, g.Map{
+					"id":   p.ID,
+					"name": p.Name,
+					"apr":  p.APR,
+					"tvl":  p.TVL,
+				})
+			}
+			item["preview"] = preview
+		}
+		chains = append(chains, item)
+	}
+	r.Response.WriteJson(g.Map{
+		"code":    200,
+		"message": "success",
+		"data": g.Map{
+			"total":  total,
+			"chains": chains,
+			"tip":    "这是 farming_pool 预览，不会发送 Telegram。确认数量后把各链 Chat ID 填进 config.yaml",
 		},
 	})
 }

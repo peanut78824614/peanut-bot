@@ -2,7 +2,12 @@
 
 ## 功能说明
 
-本功能会每30秒自动监控 KyberSwap 的高 APR 池子（Robinhood、BSC 和 Base 链），当发现新池子时，会自动发送美观的通知到 Telegram。
+本功能会每10秒自动监控 KyberSwap 池子，发现当天未推送过的新池子时发送 Telegram 通知。
+
+当前有两套推送，互不影响：
+
+1. **旧推送（保持不变）**：`tag=high_apr`，Robinhood / Base / BSC 合并后推到单个群组 `telegram.chatId`。Base/BSC 仍过滤 WETH、需含稳定币。
+2. **新推送（farming_pool 按链拆群）**：`tag=farming_pool`，ETH / Base / BSC / Robinhood 各拉一次，**不过滤池子**，分别推到 `telegram.farming.eth|base|bsc|robinhood`。跑通后再关闭旧推送。
 
 ## 配置步骤
 
@@ -70,7 +75,13 @@
 ```yaml
 telegram:
   botToken: "你的Bot Token"
-  chatId: "你的Chat ID或群组ID"  # 个人聊天用正数，群组用负数（如 -1001234567890）
+  chatId: "你的Chat ID或群组ID"  # 旧推送单群，保持不变
+  farming:
+    enabled: true
+    eth: ""         # ETH 链群组 Chat ID
+    base: ""
+    bsc: ""
+    robinhood: ""
 ```
 
 **重要提示**：
@@ -87,10 +98,11 @@ go run main.go
 
 ## 功能特性
 
-- ✅ 每30秒自动监控（Robinhood / Base / BSC 各请求一次，每条链 page=1、limit=100）
-- ✅ 自动检测新池子
+- ✅ 旧推送：high_apr，三条链合并推到单群（逻辑不变）
+- ✅ 新推送：farming_pool，ETH / Base / BSC / Robinhood 各推到各自群组，不过滤池子
+- ✅ 自动检测当天未推送过的池子
 - ✅ 美观的 Telegram 消息格式（支持 Markdown）
-- ✅ 自动保存历史数据
+- ✅ 新旧推送的已发送记录分开存储，互不影响
 - ✅ 消息过长时自动分批发送
 
 ## 消息格式示例
@@ -209,6 +221,17 @@ API 参数：
 - `tag=high_apr` (高 APR 标签)
 
 三条链的结果会合并去重后再进入监控逻辑。
+
+### farming_pool 新推送（按链拆群，不过滤）
+
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=1&page=1&limit=100&interval=24h&tag=farming_pool` (ETH)
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=8453&page=1&limit=100&interval=24h&tag=farming_pool` (Base)
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=56&page=1&limit=100&interval=24h&tag=farming_pool` (BSC)
+- `https://earn-service.kyberswap.com/api/v1/explorer/pools?chainIds=4663&page=1&limit=100&interval=24h&tag=farming_pool` (Robinhood)
+
+每条链的结果单独推送到对应群组，不做 WETH / 稳定币过滤。已推送记录写在 `data/farming_sent_pools_<chainId>_<日期>.json`，不会动旧的 `data/sent_pools_*.json`。
+
+创建群组和获取 Bot ID / Chat ID 的步骤见 `TELEGRAM_GROUP_GUIDE.md`。
 
 如果该端点不可用或格式不同，代码会自动尝试从 HTML 页面解析数据。
 

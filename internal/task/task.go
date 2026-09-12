@@ -13,13 +13,13 @@ var cron *gcron.Cron
 // Start 启动定时任务
 func Start(ctx context.Context) {
 	cron = gcron.New()
-	
+
 	// 注册定时任务
 	registerTasks(ctx)
-	
+
 	// 启动定时任务管理器
 	cron.Start()
-	
+
 	g.Log().Info(ctx, "定时任务已启动")
 }
 
@@ -36,19 +36,22 @@ func registerTasks(ctx context.Context) {
 	// KyberSwap 监控任务：每30秒执行一次
 	// 注意：标准 cron 不支持秒级，使用 GoFrame 的 @every 语法
 	cron.Add(ctx, "@every 10s", jobs.KyberSwapMonitorJob, "kyberswap_monitor")
-	
+
+	// farming_pool 按链拆群推送：与上面旧任务并行，确认跑通后再关闭旧任务
+	cron.Add(ctx, "@every 10s", jobs.KyberSwapFarmingMonitorJob, "kyberswap_farming_monitor")
+
 	// KyberSwap EarnFee 监控任务：每10秒执行一次，监控交易额暴增
 	cron.Add(ctx, "@every 10s", jobs.KyberSwapEarnFeeMonitorJob, "kyberswap_earn_fee_monitor")
-	
+
 	// 示例任务：每5分钟执行一次
 	cron.Add(ctx, "*/5 * * * *", jobs.ExampleJob, "example_task")
-	
+
 	// 示例任务：每天凌晨2点执行
 	cron.Add(ctx, "0 2 * * *", jobs.DailyJob, "daily_task")
-	
+
 	// 示例任务：每小时执行一次
 	cron.Add(ctx, "0 * * * *", jobs.HourlyJob, "hourly_task")
-	
+
 	// 每天0点重置已推送记录
 	cron.Add(ctx, "0 0 * * *", jobs.ResetDailySentPoolsJob, "reset_daily_sent_pools")
 	g.Log().Info(ctx, "定时任务注册完成")

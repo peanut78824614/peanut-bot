@@ -36,7 +36,7 @@ func TestParsePoolFromInterface_RobinhoodKeepsAll(t *testing.T) {
 		},
 		"chain": map[string]interface{}{"id": 4663.0, "name": "robinhood"},
 	}
-	pool := s.parsePoolFromInterface(raw)
+	pool := s.parsePoolFromInterface(raw, false)
 	if pool == nil {
 		t.Fatal("USDG pool should be kept")
 	}
@@ -52,7 +52,7 @@ func TestParsePoolFromInterface_RobinhoodKeepsAll(t *testing.T) {
 		},
 		"chain": map[string]interface{}{"id": 4663.0, "name": "robinhood"},
 	}
-	got := s.parsePoolFromInterface(wethPool)
+	got := s.parsePoolFromInterface(wethPool, false)
 	if got == nil {
 		t.Fatal("Robinhood WETH pool should be pushed")
 	}
@@ -68,7 +68,7 @@ func TestParsePoolFromInterface_RobinhoodKeepsAll(t *testing.T) {
 		},
 		"chain": map[string]interface{}{"id": 4663.0, "name": "robinhood"},
 	}
-	if s.parsePoolFromInterface(noStable) == nil {
+	if s.parsePoolFromInterface(noStable, false) == nil {
 		t.Fatal("Robinhood pool without stablecoin should be pushed")
 	}
 }
@@ -83,7 +83,7 @@ func TestParsePoolFromInterface_BaseBSCStillFiltered(t *testing.T) {
 		},
 		"chain": map[string]interface{}{"id": 8453.0, "name": "base"},
 	}
-	if s.parsePoolFromInterface(wethPool) != nil {
+	if s.parsePoolFromInterface(wethPool, false) != nil {
 		t.Fatal("Base WETH pool should still be filtered")
 	}
 
@@ -95,7 +95,50 @@ func TestParsePoolFromInterface_BaseBSCStillFiltered(t *testing.T) {
 		},
 		"chain": map[string]interface{}{"id": 56.0, "name": "bsc"},
 	}
-	if s.parsePoolFromInterface(noStable) != nil {
+	if s.parsePoolFromInterface(noStable, false) != nil {
 		t.Fatal("BSC pool without USDT/USDC/USDG should still be filtered")
+	}
+}
+
+func TestParsePoolFromInterface_KeepAllNoFilter(t *testing.T) {
+	s := &kyberSwapImpl{}
+	wethPool := map[string]interface{}{
+		"address": "0xpoolweth",
+		"tokens": []interface{}{
+			map[string]interface{}{"address": "0xweth", "symbol": "WETH"},
+			map[string]interface{}{"address": "0xusdc", "symbol": "USDC"},
+		},
+		"chain": map[string]interface{}{"id": 1.0, "name": "ethereum"},
+	}
+	got := s.parsePoolFromInterface(wethPool, true)
+	if got == nil {
+		t.Fatal("ETH WETH pool should be kept when keepAll=true")
+	}
+	if got.ChainID != 1 {
+		t.Fatalf("chainID=%d", got.ChainID)
+	}
+
+	noStable := map[string]interface{}{
+		"address": "0xpoolnone",
+		"tokens": []interface{}{
+			map[string]interface{}{"address": "0xa", "symbol": "PUNKA"},
+			map[string]interface{}{"address": "0xb", "symbol": "HIMS"},
+		},
+		"chain": map[string]interface{}{"id": 8453.0, "name": "base"},
+	}
+	if s.parsePoolFromInterface(noStable, true) == nil {
+		t.Fatal("Base pool without stablecoin should be kept when keepAll=true")
+	}
+
+	bscWeth := map[string]interface{}{
+		"address": "0xpoolbsc",
+		"tokens": []interface{}{
+			map[string]interface{}{"address": "0xweth", "symbol": "WETH"},
+			map[string]interface{}{"address": "0xbnb", "symbol": "WBNB"},
+		},
+		"chain": map[string]interface{}{"id": 56.0, "name": "bsc"},
+	}
+	if s.parsePoolFromInterface(bscWeth, true) == nil {
+		t.Fatal("BSC WETH pool should be kept when keepAll=true")
 	}
 }

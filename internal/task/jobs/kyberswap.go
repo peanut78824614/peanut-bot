@@ -14,6 +14,9 @@ import (
 
 // KyberSwapMonitorJob KyberSwap 监控任务
 func KyberSwapMonitorJob(ctx context.Context) {
+	if !g.Cfg().MustGet(ctx, "telegram.legacyEnabled", true).Bool() {
+		return
+	}
 	g.Log().Info(ctx, "开始执行 KyberSwap 监控任务...")
 
 	kyberSwap := service.KyberSwap()
@@ -153,6 +156,12 @@ func ResetDailySentPoolsJob(ctx context.Context) {
 		g.Log().Error(ctx, "重置每日已推送池子记录失败:", err)
 	} else {
 		g.Log().Info(ctx, "每日已推送池子记录重置成功")
+	}
+
+	if err := kyberSwap.ResetDailySentFarmingPools(ctx); err != nil {
+		g.Log().Error(ctx, "重置每日 farming 已推送池子记录失败:", err)
+	} else {
+		g.Log().Info(ctx, "每日 farming 已推送池子记录重置成功")
 	}
 }
 
