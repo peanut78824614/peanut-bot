@@ -48,16 +48,23 @@ func KyberSwapFarmingMonitorJob(ctx context.Context) {
 		return
 	}
 
-	g.Log().Info(ctx, "开始执行 KyberSwap farming_pool 按链推送任务...")
+	g.Log().Info(ctx, "开始执行 KyberSwap 按链并行推送任务...")
 
 	kyberSwap := service.KyberSwap()
 	telegram := service.Telegram()
 
+	var wg sync.WaitGroup
 	for _, chain := range service.FarmingChains() {
-		notifyFarmingChain(ctx, kyberSwap, telegram, chain)
+		chain := chain
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			notifyFarmingChain(ctx, kyberSwap, telegram, chain)
+		}()
 	}
+	wg.Wait()
 
-	g.Log().Info(ctx, "KyberSwap farming_pool 按链推送任务执行完成")
+	g.Log().Info(ctx, "KyberSwap 按链并行推送任务执行完成")
 }
 
 func notifyFarmingChain(ctx context.Context, kyberSwap service.IKyberSwap, telegram service.ITelegram, chain service.FarmingChain) {
