@@ -55,7 +55,7 @@ app:
 telegram:
   botToken: "7195943995:AAGkxidmBEBY2GzrdhYb2OPEpRiuxY_LtbQ"
   chatId: "-1003643474581"
-  legacyEnabled: true
+  legacyEnabled: false
   farming:
     enabled: true
     eth: "-1003930101541"

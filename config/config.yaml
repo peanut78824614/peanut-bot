@@ -70,8 +70,8 @@ cron:
 # Telegram 配置
 telegram:
   botToken: "7195943995:AAGkxidmBEBY2GzrdhYb2OPEpRiuxY_LtbQ" # 请填写你的 Telegram Bot Token（不需要加 "bot" 前缀）
-  chatId: "-1003643474581"   # 旧推送（high_apr 合并到单群），保持不变，跑通新推送后再关闭
-  legacyEnabled: true        # 旧 high_apr 单群推送开关，新推送跑通后改为 false
+  chatId: "-1003643474581"   # 旧推送单群，已关闭
+  legacyEnabled: false       # 旧 high_apr 单群推送已关闭，四个按链群继续推
   # 四条链按群推送：tag=high_apr，不过滤池子。与上面 chatId 互不影响。
   farming:
     enabled: true
